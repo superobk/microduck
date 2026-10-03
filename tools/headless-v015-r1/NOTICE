@@ -1,0 +1,5 @@
+Unofficial fixed-head compatibility source patch for pollen-robotics/microduck.
+Based on daemon-v0.15.0, commit a9ec4b2079ef8ee7904014089c885bb07d57d63c.
+Upstream code excerpts and derived changes are provided under Apache License 2.0.
+This package is not endorsed by Pollen Robotics. No model weights, secrets,
+compiled firmware, hardware certification or performance guarantees are included.

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="880" viewBox="0 0 1120 880"><title>每次远端操作的可复用审计</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10z" fill="#356383"/></marker></defs>
+<rect width="100%" height="100%" fill="#f7fafc"/>
+<text x="85" y="30" font-family="sans-serif" font-size="23" font-weight="bold" fill="#18354b">每次远端操作的可复用审计</text>
+<path d="M300,133 L300,159.0 L300,159.0 L300,185" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="307.0" y="153.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">归档</text>
+<path d="M300,263 L300,289.0 L300,289.0 L300,315" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="307.0" y="283.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">落盘后执行</text>
+<path d="M300,393 L300,419.0 L300,419.0 L300,445" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="307.0" y="413.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">完整输出</text>
+<path d="M300,523 L300,549.0 L300,549.0 L300,575" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="307.0" y="543.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">完成或失败</text>
+<path d="M300,653 L300,679.0 L300,679.0 L300,705" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="307.0" y="673.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">复用/追踪</text>
+<rect x="85" y="55" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="85" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">操作意义 + 后续注意事项</text>
+<text x="300" y="109" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">目标/精确脚本/产物哈希</text>
+<rect x="85" y="185" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="215" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">执行前持久保存operation.json</text>
+<text x="300" y="239" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">脚本按内容SHA归档</text>
+<rect x="85" y="315" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="345" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">审计SSH / SCP</text>
+<text x="300" y="369" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">启用host-key校验，凭证不入日志</text>
+<rect x="85" y="445" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="475" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">流式保存完整输出</text>
+<text x="300" y="499" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">失败/断线也保留</text>
+<rect x="85" y="575" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="605" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">执行后退出码/UTC/输出SHA</text>
+<text x="300" y="629" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">success 或 failed_or_interrupted</text>
+<rect x="85" y="705" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="735" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">日志索引 + 文档证据引用</text>
+<text x="300" y="759" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">不把软件试验写成实机通过</text>
+</svg>

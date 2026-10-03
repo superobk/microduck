@@ -1,0 +1,19 @@
+flowchart TD
+  bus["IMU200 + 11真实舵机<br/>读取、有限值与新鲜度检查"]
+  fixed["缺失头颈30–33<br/>固定HOME，速度/电流0"]
+  obs["15逻辑槽 → 跳过嘴 → 61维观测<br/>HOME仅减一次"]
+  model["原ONNX（文件不变）<br/>61输入 → 14输出"]
+  action["完整14项模型动作"]
+  history["原始14项 → 下帧历史<br/>包含未执行的头颈动作"]
+  target["散射15槽 → 原缩放/滤波<br/>头颈固定目标"]
+  pack["仅打包真实ID<br/>右腿动作9–13"]
+  out["11真实设备写入<br/>嘴独立命令，故障门禁"]
+  bus -->|"按ID回填"| obs
+  fixed -->|"仅虚拟缺失槽"| obs
+  obs -->|"f32"| model
+  model -->|"有限值"| action
+  action -->|"完整保留"| history
+  history -->|"下一帧"| obs
+  action -->|"跳过嘴"| target
+  target -->|"投影"| pack
+  pack -->|"物理集合"| out

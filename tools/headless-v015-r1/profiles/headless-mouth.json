@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "profile": "headless",
+  "mouth_present": true,
+  "locked_head_rad": [
+    0.3491,
+    0.3491,
+    0.0,
+    0.0
+  ],
+  "locked_mouth_rad": 0.0,
+  "allow_motion": false,
+  "max_twist": [
+    0.1,
+    0.04,
+    0.4
+  ],
+  "stop_on_identical_imu_blocks": null
+}

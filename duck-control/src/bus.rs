@@ -29,6 +29,7 @@ use crate::model::{
     BAUD_RATE, EXPECTED_REGISTERS, FACTORY_BAUD_RATE, FACTORY_ID, IMU_DXL_ID, JOINT_IDS,
     JOINT_NAMES, NUM_JOINTS,
 };
+use crate::morphology::{self, Morphology};
 
 /// Start of the contiguous block read every tick: `present_pwm`, `present_current`,
 /// `present_velocity`, `present_position`. Twelve bytes covers all four, and happens to be
@@ -112,6 +113,9 @@ pub struct DynamixelIo {
     port: String,
     /// IMU first, then the servos in [`JOINT_IDS`] order — the order blocks come back in.
     ids: Vec<u8>,
+    morphology: &'static Morphology,
+    motor_ids: Vec<u8>,
+    joint_slots: Vec<usize>,
     /// Kept for the same reason as `port`: [`Self::reopen`] builds a new controller, and one
     /// built without this would silently drop back to a plain sync read for the rest of the
     /// process — a motor swap quietly halving the tick's bus budget.
@@ -129,14 +133,20 @@ impl DynamixelIo {
     pub fn open(port: &str, fast_sync_read: bool) -> Result<Self> {
         let controller = open_controller(port, BAUD_RATE, fast_sync_read)?;
 
-        let mut ids = Vec::with_capacity(NUM_JOINTS + 1);
+        let morphology = morphology::current();
+        let joint_slots: Vec<usize> = morphology.active_slots().collect();
+        let motor_ids = morphology.motor_ids();
+        let mut ids = Vec::with_capacity(motor_ids.len() + 1);
         ids.push(IMU_DXL_ID);
-        ids.extend_from_slice(&JOINT_IDS);
+        ids.extend_from_slice(&motor_ids);
 
         Ok(Self {
             controller,
             port: port.to_owned(),
             ids,
+            morphology,
+            motor_ids,
+            joint_slots,
             fast_sync_read,
             imu: SflpDecoder::default(),
             stale_imu: StaleImuTracker::default(),
@@ -151,7 +161,7 @@ impl DynamixelIo {
     /// a whole class of "why is it slow on this robot".
     pub fn check_registers(&mut self) -> Result<usize> {
         let mut fixed = 0;
-        for &id in &JOINT_IDS {
+        for id in self.motor_ids.clone() {
             fixed += self.check_registers_of(id)?;
         }
         Ok(fixed)
@@ -161,6 +171,13 @@ impl DynamixelIo {
     fn check_registers_of(&mut self, id: u8) -> Result<usize> {
         let mut fixed = 0;
         for &(name, want) in EXPECTED_REGISTERS {
+            // The fixed-head prototype does not inherit the full robot's deliberate
+            // disabling of the input-voltage shutdown bit. This changes no policy data.
+            let want = if self.morphology.headless() && name == "shutdown" {
+                want | 1
+            } else {
+                want
+            };
             // rustypot returns a Vec even for a single-id read. An empty one means the
             // servo did not answer, which must not be read as "register is fine".
             let raw = match name {
@@ -204,7 +221,7 @@ impl DynamixelIo {
     /// bus traffic the replacement path costs a robot whose servos are all present.
     pub fn missing_servos(&mut self) -> Result<Vec<u8>> {
         let mut missing = Vec::new();
-        for &id in &JOINT_IDS {
+        for &id in &self.motor_ids {
             let answered = self
                 .controller
                 .ping(id)
@@ -232,6 +249,11 @@ impl DynamixelIo {
     /// missing, or was replaced by one that is not fresh. The bus is back at [`BAUD_RATE`]
     /// either way, so the caller can keep waiting on it.
     pub fn adopt_replacement(&mut self, id: u8) -> Result<bool> {
+        if !self.motor_ids.contains(&id) {
+            return Err(IoError::Bus(format!(
+                "{id} is not a configured physical servo"
+            )));
+        }
         let name = JOINT_IDS
             .iter()
             .position(|&j| j == id)
@@ -341,17 +363,19 @@ impl DynamixelIo {
     pub fn present_positions(&mut self) -> Result<[f64; NUM_JOINTS]> {
         let values = self
             .controller
-            .sync_read_present_position(&JOINT_IDS)
+            .sync_read_present_position(&self.motor_ids)
             .map_err(|e| IoError::Bus(format!("read present positions: {e}")))?;
-        if values.len() != NUM_JOINTS {
+        if values.len() != self.motor_ids.len() {
             return Err(IoError::ShortRead {
                 what: "present positions",
-                expected: NUM_JOINTS,
+                expected: self.motor_ids.len(),
                 got: values.len(),
             });
         }
-        let mut out = [0.0; NUM_JOINTS];
-        out.copy_from_slice(&values);
+        let mut out = self.morphology.seed_positions();
+        for (&joint, value) in self.joint_slots.iter().zip(values) {
+            out[joint] = value;
+        }
         Ok(out)
     }
 
@@ -368,10 +392,29 @@ impl DynamixelIo {
     /// Writing the rest costs the same as it would have, and the error names every joint that
     /// did not answer so the caller can decide whether to ask again.
     pub fn set_torque(&mut self, on: bool) -> Result<()> {
+        if on && !self.morphology.motion_allowed() {
+            return Err(IoError::Bus(
+                "bench-only morphology: allow_motion is false".to_owned(),
+            ));
+        }
         let mut failed = Vec::new();
-        for &id in &JOINT_IDS {
+        for &id in &self.motor_ids {
             if let Err(e) = self.controller.write_torque_enable(id, on) {
                 failed.push(format!("torque {on} on {id}: {e}"));
+            }
+        }
+        if self.morphology.headless() && !on {
+            // A write acknowledgement does not prove every physical motor is now
+            // disabled. Read back the RAM bit before the latch permits rearming.
+            // Full15 keeps the original transaction count/behavior.
+            for &id in &self.motor_ids {
+                match self.controller.read_torque_enable(id) {
+                    Ok(values) if values == [false] => {}
+                    Ok(values) => failed.push(format!(
+                        "torque-off readback on {id}: expected one false bit, got {values:?}"
+                    )),
+                    Err(e) => failed.push(format!("torque-off readback on {id}: {e}")),
+                }
             }
         }
         if failed.is_empty() {
@@ -473,6 +516,7 @@ impl RobotIo for DynamixelIo {
         }
 
         let mut sensors = Sensors::default();
+        self.morphology.project_sensors(&mut sensors);
 
         // Slot 0 is the IMU board.
         if blocks[0].len() == IMU_BLOCK_LEN {
@@ -499,7 +543,7 @@ impl RobotIo for DynamixelIo {
             });
         }
 
-        for (joint, block) in blocks[1..].iter().enumerate() {
+        for (&joint, block) in self.joint_slots.iter().zip(&blocks[1..]) {
             if block.len() != READ_LEN as usize {
                 return Err(IoError::ShortRead {
                     what: "motor block",
@@ -519,8 +563,10 @@ impl RobotIo for DynamixelIo {
     }
 
     fn write(&mut self, targets: &JointTargets) -> Result<()> {
+        let (packed, count) = self.morphology.pack_positions(&targets.positions);
+        debug_assert_eq!(count, self.motor_ids.len());
         self.controller
-            .sync_write_goal_position(&JOINT_IDS, &targets.positions)
+            .sync_write_goal_position(&self.motor_ids, &packed[..count])
             .map_err(|e| IoError::Bus(format!("sync_write goal positions: {e}")))
     }
 
@@ -530,6 +576,11 @@ impl RobotIo for DynamixelIo {
     }
 
     fn reboot(&mut self, id: u8) -> Result<()> {
+        if self.morphology.is_absent_id(id) {
+            return Err(IoError::Bus(format!(
+                "servo {id} is deliberately absent in this morphology"
+            )));
+        }
         // The status packet is a courtesy the servo may not manage before it resets, so only a
         // failure to send is an error here.
         self.controller
@@ -547,7 +598,7 @@ impl RobotIo for DynamixelIo {
         // it is pinned here rather than exposed as a knob.
         const KI: u16 = 0;
         const KD: u16 = 0;
-        for &id in &JOINT_IDS {
+        for &id in &self.motor_ids {
             self.controller
                 .write_position_p_gain(id, kp)
                 .map_err(|e| IoError::Bus(format!("position_p_gain {kp} on {id}: {e}")))?;
@@ -576,20 +627,20 @@ impl RobotIo for DynamixelIo {
     fn slow_sensors(&mut self) -> Result<SlowSensors> {
         let blocks = self
             .controller
-            .sync_read_raw_data(&JOINT_IDS, SLOW_READ_ADDR, SLOW_READ_LEN)
+            .sync_read_raw_data(&self.motor_ids, SLOW_READ_ADDR, SLOW_READ_LEN)
             .map_err(|e| IoError::Bus(format!("voltage+temperature sync_read: {e}")))?;
 
-        if blocks.len() != NUM_JOINTS {
+        if blocks.len() != self.motor_ids.len() {
             return Err(IoError::ShortRead {
                 what: "voltage+temperature blocks",
-                expected: NUM_JOINTS,
+                expected: self.motor_ids.len(),
                 got: blocks.len(),
             });
         }
 
         let mut temps_c = [0.0; NUM_JOINTS];
         let mut volts = Vec::with_capacity(NUM_JOINTS);
-        for (joint, block) in blocks.iter().enumerate() {
+        for (&joint, block) in self.joint_slots.iter().zip(&blocks) {
             if block.len() != SLOW_READ_LEN as usize {
                 return Err(IoError::ShortRead {
                     what: "voltage+temperature block",
@@ -609,7 +660,7 @@ impl RobotIo for DynamixelIo {
         if volts.is_empty() {
             return Err(IoError::ShortRead {
                 what: "input voltage",
-                expected: NUM_JOINTS,
+                expected: self.motor_ids.len(),
                 got: 0,
             });
         }

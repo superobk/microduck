@@ -1,0 +1,20 @@
+flowchart TD
+  software["软件/自审/离线验证<br/>本轮候选交付"]
+  review["人的独立review与SSH身份核对<br/>当前仍有未验证项"]
+  fake["备份 → 独立候选安装 → fake<br/>所有硬件服务停止"]
+  supply["供电3.7–6.0V合规实测<br/>机械/限位/IMU/质量/急停"]
+  sense["人在场、支撑、通信与感知<br/>普通/Fast分别验收"]
+  home["支撑下HOME逐关节验收"]
+  stand["零速60秒 × 5次<br/>无跌倒/锁止/滑脚/顶限位"]
+  walk["0.03m/s、0.10rad/s起步<br/>各工况5次；标尺/录像测量"]
+  stop["任一步异常：停止/支撑/切电<br/>保留失败轨迹"]
+  software -->|"候选"| review
+  review -->|"review通过/SSH恢复"| fake
+  fake -->|"本轮到此，后续另审"| supply
+  supply -->|"前置全部验收"| sense
+  sense -->|"通过"| home
+  home -->|"通过"| stand
+  stand -->|"通过"| walk
+  sense -->|"异常"| stop
+  stand -->|"异常"| stop
+  walk -->|"异常"| stop

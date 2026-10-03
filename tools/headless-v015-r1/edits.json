@@ -1,0 +1,307 @@
+{
+  "upstream_commit": "a9ec4b2079ef8ee7904014089c885bb07d57d63c",
+  "files": {
+    "duck-control/src/lib.rs": {
+      "git_blob_sha1": "ca6f95df16fb2224289b6e49ec4665b363930931",
+      "edits": [
+        {
+          "name": "export morphology module",
+          "old": "pub mod model;\npub mod obs;",
+          "new": "pub mod model;\npub mod morphology;\npub mod obs;",
+          "count": 1
+        }
+      ]
+    },
+    "duck-control/src/bus.rs": {
+      "git_blob_sha1": "083ab4821681cfc027584d6a97e74c51d3b30195",
+      "edits": [
+        {
+          "name": "import physical topology",
+          "old": "use crate::imu::{IMU_BLOCK_LEN, SflpDecoder};",
+          "new": "use crate::imu::{IMU_BLOCK_LEN, SflpDecoder};\nuse crate::morphology::{self, Morphology};",
+          "count": 1
+        },
+        {
+          "name": "persist physical ID to logical-slot mapping",
+          "old": "    ids: Vec<u8>,",
+          "new": "    ids: Vec<u8>,\n    morphology: &'static Morphology,\n    motor_ids: Vec<u8>,\n    joint_slots: Vec<usize>,",
+          "count": 1
+        },
+        {
+          "name": "construct only expected physical IDs",
+          "old": "        let mut ids = Vec::with_capacity(NUM_JOINTS + 1);\n        ids.push(IMU_DXL_ID);\n        ids.extend_from_slice(&JOINT_IDS);",
+          "new": "        let morphology = morphology::current();\n        let joint_slots: Vec<usize> = morphology.active_slots().collect();\n        let motor_ids = morphology.motor_ids();\n        let mut ids = Vec::with_capacity(motor_ids.len() + 1);\n        ids.push(IMU_DXL_ID);\n        ids.extend_from_slice(&motor_ids);",
+          "count": 1
+        },
+        {
+          "name": "store mapping in IO instance",
+          "old": "            ids,\n            fast_sync_read,\n            imu: SflpDecoder::default(),",
+          "new": "            ids,\n            morphology,\n            motor_ids,\n            joint_slots,\n            fast_sync_read,\n            imu: SflpDecoder::default(),",
+          "count": 1
+        },
+        {
+          "name": "register checks cover physical motors only without borrow aliasing",
+          "old": "        for &id in &JOINT_IDS {\n            fixed += self.check_registers_of(id)?;\n        }",
+          "new": "        for id in self.motor_ids.clone() {\n            fixed += self.check_registers_of(id)?;\n        }",
+          "count": 1
+        },
+        {
+          "name": "ping torque gain target physical list",
+          "old": "        for &id in &JOINT_IDS {",
+          "new": "        for &id in &self.motor_ids {",
+          "count": 3
+        },
+        {
+          "name": "retain input-voltage shutdown protection in headless builds",
+          "old": "        for &(name, want) in EXPECTED_REGISTERS {\n            // rustypot",
+          "new": "        for &(name, want) in EXPECTED_REGISTERS {\n            // The fixed-head prototype does not inherit the full robot's deliberate\n            // disabling of the input-voltage shutdown bit. This changes no policy data.\n            let want = if self.morphology.headless() && name == \"shutdown\" { want | 1 } else { want };\n            // rustypot",
+          "count": 1
+        },
+        {
+          "name": "never adopt a replacement into a deliberately missing slot",
+          "old": "    pub fn adopt_replacement(&mut self, id: u8) -> Result<bool> {\n        let name = JOINT_IDS",
+          "new": "    pub fn adopt_replacement(&mut self, id: u8) -> Result<bool> {\n        if !self.motor_ids.contains(&id) {\n            return Err(IoError::Bus(format!(\"{id} is not a configured physical servo\")));\n        }\n        let name = JOINT_IDS",
+          "count": 1
+        },
+        {
+          "name": "boot positions scatter rather than positional copy",
+          "old": "    pub fn present_positions(&mut self) -> Result<[f64; NUM_JOINTS]> {\n        let values = self\n            .controller\n            .sync_read_present_position(&JOINT_IDS)\n            .map_err(|e| IoError::Bus(format!(\"read present positions: {e}\")))?;\n        if values.len() != NUM_JOINTS {\n            return Err(IoError::ShortRead {\n                what: \"present positions\",\n                expected: NUM_JOINTS,\n                got: values.len(),\n            });\n        }\n        let mut out = [0.0; NUM_JOINTS];\n        out.copy_from_slice(&values);\n        Ok(out)\n    }",
+          "new": "    pub fn present_positions(&mut self) -> Result<[f64; NUM_JOINTS]> {\n        let values = self\n            .controller\n            .sync_read_present_position(&self.motor_ids)\n            .map_err(|e| IoError::Bus(format!(\"read present positions: {e}\")))?;\n        if values.len() != self.motor_ids.len() {\n            return Err(IoError::ShortRead {\n                what: \"present positions\",\n                expected: self.motor_ids.len(),\n                got: values.len(),\n            });\n        }\n        let mut out = self.morphology.seed_positions();\n        for (&joint, value) in self.joint_slots.iter().zip(values) { out[joint] = value; }\n        Ok(out)\n    }",
+          "count": 1
+        },
+        {
+          "name": "bench profile cannot enable torque",
+          "old": "    pub fn set_torque(&mut self, on: bool) -> Result<()> {\n        let mut failed = Vec::new();",
+          "new": "    pub fn set_torque(&mut self, on: bool) -> Result<()> {\n        if on && !self.morphology.motion_allowed() {\n            return Err(IoError::Bus(\"bench-only morphology: allow_motion is false\".to_owned()));\n        }\n        let mut failed = Vec::new();",
+          "count": 1
+        },
+        {
+          "name": "initialize synthetic slots before decoding physical samples",
+          "old": "        let mut sensors = Sensors::default();\n\n        // Slot 0 is the IMU board.",
+          "new": "        let mut sensors = Sensors::default();\n        self.morphology.project_sensors(&mut sensors);\n\n        // Slot 0 is the IMU board.",
+          "count": 1
+        },
+        {
+          "name": "map compressed bus block indexes back to logical indexes",
+          "old": "        for (joint, block) in blocks[1..].iter().enumerate() {",
+          "new": "        for (&joint, block) in self.joint_slots.iter().zip(&blocks[1..]) {",
+          "count": 1
+        },
+        {
+          "name": "send only actual physical target prefix",
+          "old": "    fn write(&mut self, targets: &JointTargets) -> Result<()> {\n        self.controller\n            .sync_write_goal_position(&JOINT_IDS, &targets.positions)\n            .map_err(|e| IoError::Bus(format!(\"sync_write goal positions: {e}\")))\n    }",
+          "new": "    fn write(&mut self, targets: &JointTargets) -> Result<()> {\n        let (packed, count) = self.morphology.pack_positions(&targets.positions);\n        debug_assert_eq!(count, self.motor_ids.len());\n        self.controller\n            .sync_write_goal_position(&self.motor_ids, &packed[..count])\n            .map_err(|e| IoError::Bus(format!(\"sync_write goal positions: {e}\")))\n    }",
+          "count": 1
+        },
+        {
+          "name": "explicit absent servo reboot is an error",
+          "old": "    fn reboot(&mut self, id: u8) -> Result<()> {\n        // The status packet",
+          "new": "    fn reboot(&mut self, id: u8) -> Result<()> {\n        if self.morphology.is_absent_id(id) {\n            return Err(IoError::Bus(format!(\"servo {id} is deliberately absent in this morphology\")));\n        }\n        // The status packet",
+          "count": 1
+        },
+        {
+          "name": "slow read physical ID list",
+          "old": ".sync_read_raw_data(&JOINT_IDS, SLOW_READ_ADDR, SLOW_READ_LEN)",
+          "new": ".sync_read_raw_data(&self.motor_ids, SLOW_READ_ADDR, SLOW_READ_LEN)",
+          "count": 1
+        },
+        {
+          "name": "slow read validates active count",
+          "old": "        if blocks.len() != NUM_JOINTS {\n            return Err(IoError::ShortRead {\n                what: \"voltage+temperature blocks\",\n                expected: NUM_JOINTS,",
+          "new": "        if blocks.len() != self.motor_ids.len() {\n            return Err(IoError::ShortRead {\n                what: \"voltage+temperature blocks\",\n                expected: self.motor_ids.len(),",
+          "count": 1
+        },
+        {
+          "name": "slow sensors scatter back to logical slots",
+          "old": "        for (joint, block) in blocks.iter().enumerate() {",
+          "new": "        for (&joint, block) in self.joint_slots.iter().zip(&blocks) {",
+          "count": 1
+        },
+        {
+          "name": "empty voltage error refers to expected physical count",
+          "old": "                what: \"input voltage\",\n                expected: NUM_JOINTS,",
+          "new": "                what: \"input voltage\",\n                expected: self.motor_ids.len(),",
+          "count": 1
+        }
+      ]
+    },
+    "robotd/src/control.rs": {
+      "git_blob_sha1": "a02ec53e517bc30e0993b2a68760266d36147043",
+      "edits": [
+        {
+          "name": "disable seated boot and shutdown sit selection",
+          "old": "    pub fn has_sitstand(&self) -> bool {\n        self.policy.has_sitstand()\n    }",
+          "new": "    pub fn has_sitstand(&self) -> bool {\n        !duck_control::morphology::current().headless() && self.policy.has_sitstand()\n    }",
+          "count": 1
+        },
+        {
+          "name": "defensive whole-body skill refusal: pub fn start_ground_pick(&mut self) -> Result<(), &'static str> {",
+          "old": "    pub fn start_ground_pick(&mut self) -> Result<(), &'static str> {",
+          "new": "    pub fn start_ground_pick(&mut self) -> Result<(), &'static str> {\n        if duck_control::morphology::current().headless() {\n            return Err(\"whole-body skills disabled by headless morphology\");\n        }",
+          "count": 1
+        },
+        {
+          "name": "defensive whole-body skill refusal: pub fn start_skill(&mut self, index: usize) -> Result<bool, &'static str> {",
+          "old": "    pub fn start_skill(&mut self, index: usize) -> Result<bool, &'static str> {",
+          "new": "    pub fn start_skill(&mut self, index: usize) -> Result<bool, &'static str> {\n        if duck_control::morphology::current().headless() {\n            return Err(\"whole-body skills disabled by headless morphology\");\n        }",
+          "count": 1
+        },
+        {
+          "name": "defensive whole-body skill refusal: pub fn sit_toggle(&mut self) -> Result<&'static str, &'static str> {",
+          "old": "    pub fn sit_toggle(&mut self) -> Result<&'static str, &'static str> {",
+          "new": "    pub fn sit_toggle(&mut self) -> Result<&'static str, &'static str> {\n        if duck_control::morphology::current().headless() {\n            return Err(\"whole-body skills disabled by headless morphology\");\n        }",
+          "count": 1
+        },
+        {
+          "name": "do not advertise unavailable controller skills",
+          "old": "    pub fn skill_names(&self) -> Vec<String> {\n        self.skills",
+          "new": "    pub fn skill_names(&self) -> Vec<String> {\n        if duck_control::morphology::current().headless() { return Vec::new(); }\n        self.skills",
+          "count": 1
+        },
+        {
+          "name": "defensive internal skill guard pub fn begin_shutdown_sit(&mut self) {",
+          "old": "    pub fn begin_shutdown_sit(&mut self) {",
+          "new": "    pub fn begin_shutdown_sit(&mut self) {\n        if duck_control::morphology::current().headless() { return; }",
+          "count": 1
+        },
+        {
+          "name": "defensive internal skill guard pub fn begin_boot_rise(&mut self) {",
+          "old": "    pub fn begin_boot_rise(&mut self) {",
+          "new": "    pub fn begin_boot_rise(&mut self) {\n        if duck_control::morphology::current().headless() { return; }",
+          "count": 1
+        },
+        {
+          "name": "build virtual observation in any backend and clear unsupported modes",
+          "old": "    ) -> Result<Step, PolicyError> {\n        // Expire windows first",
+          "new": "    ) -> Result<Step, PolicyError> {\n        let morphology = duck_control::morphology::current();\n        let mut projected = *sensors;\n        morphology.project_sensors(&mut projected);\n        let sensors = &projected;\n        let body_active = body_active && !morphology.headless();\n        if morphology.headless() {\n            self.active = None;\n            self.ground_pick = None;\n            self.sit = Sit::Up;\n        }\n        // Expire windows first",
+          "count": 1
+        },
+        {
+          "name": "effective command is projected before ONNX",
+          "old": "        let (net, effective, label) = if let Some(active) = self.active {",
+          "new": "        let (net, mut effective, label) = if let Some(active) = self.active {",
+          "count": 1
+        },
+        {
+          "name": "fixed-head command uses lock minus HOME",
+          "old": "        self.last_net = Some(net);\n\n        let observation = Observation::build(",
+          "new": "        morphology.project_command(&mut effective);\n        self.last_net = Some(net);\n\n        let observation = Observation::build(",
+          "count": 1
+        },
+        {
+          "name": "fixed head targets after normal filtering; raw action history unchanged",
+          "old": "        self.previous = Some(targets);\n\n        // Advance the windows",
+          "new": "        morphology.project_positions(&mut targets);\n        self.previous = Some(targets);\n\n        // Advance the windows",
+          "count": 1
+        }
+      ]
+    },
+    "robotd/src/main.rs": {
+      "git_blob_sha1": "ab574b662e5b1e27b63dbbb6773609cfdd73297e",
+      "edits": [
+        {
+          "name": "daemon side capability module",
+          "old": "mod control;\nmod intents;",
+          "new": "mod control;\nmod headless;\nmod intents;",
+          "count": 1
+        },
+        {
+          "name": "load independent hardware sidecar before params and IO",
+          "old": "    let explicit = args.params.is_some();",
+          "new": "    if let Err(e) = duck_control::morphology::initialize_from_env() {\n        tracing::error!(error = %e, \"bad morphology; no motor bus has been opened\");\n        return ExitCode::FAILURE;\n    }\n    tracing::warn!(report = %duck_control::morphology::current().report(), \"physical morphology\");\n\n    let explicit = args.params.is_some();",
+          "count": 1
+        },
+        {
+          "name": "forbid wrong startup mode and automatic limp recovery in headless profile",
+          "old": "    if let Some(Command::Init { duration }) = args.command {\n        // init opens",
+          "new": "    if duck_control::morphology::current().headless() {\n        if args.sim.is_some() {\n            tracing::error!(\"headless --sim needs a matching locked-body simulator; use --fake for software-only tests\");\n            return ExitCode::FAILURE;\n        }\n        if params.policy.mode != Mode::Walk {\n            tracing::error!(\"headless profile requires policy.mode=walk\");\n            return ExitCode::FAILURE;\n        }\n        // Replace the full-body limp -> automatic rise handoff with an explicit latch.\n        params.safety.limp_fall = false;\n    }\n    if let Some(Command::Init { duration }) = args.command {\n        if !duck_control::morphology::current().motion_allowed() {\n            tracing::error!(\"bench-only morphology refuses init: allow_motion is false\");\n            return ExitCode::FAILURE;\n        }\n        // init opens",
+          "count": 1
+        },
+        {
+          "name": "synthetic slots in fake as well as hardware telemetry",
+          "old": "        let fresh = match safety.read() {\n            Ok(sensors) => {\n                state.consecutive_errors.store(0, Ordering::Relaxed);",
+          "new": "        let fresh = match safety.read() {\n            Ok(mut sensors) => {\n                duck_control::morphology::current().project_sensors(&mut sensors);\n                state.consecutive_errors.store(0, Ordering::Relaxed);",
+          "count": 1
+        },
+        {
+          "name": "latch falls and repeated sensor faults before any enable decision",
+          "old": "        state.fallen.store(safety.fallen(), Ordering::Relaxed);\n\n        let snapshot = intents.snapshot();",
+          "new": "        state.fallen.store(safety.fallen(), Ordering::Relaxed);\n\n        if headless::enforce_stop(&mut safety, &state, &intents, fresh.as_ref()) {\n            bringup = Bringup::Limp;\n            was_driving = false;\n            hold = coast.known_positions(hold);\n            if let Some(c) = controller.as_mut() { c.reset(); }\n        }\n        let snapshot = intents.snapshot();",
+          "count": 1
+        },
+        {
+          "name": "reboot all means all physical motors",
+          "old": "            let ids: Vec<u8> = if ids.is_empty() {\n                duck_control::model::JOINT_IDS.to_vec()",
+          "new": "            let ids: Vec<u8> = if ids.is_empty() {\n                duck_control::morphology::current().motor_ids()",
+          "count": 1
+        },
+        {
+          "name": "report and infer the same sanitized velocity command",
+          "old": "        let (mut targets, gain, moving, policy_label) = match (driving, sensors.as_ref()) {",
+          "new": "        let mut command = command;\n        duck_control::morphology::current().project_command(&mut command);\n        let (mut targets, gain, moving, policy_label) = match (driving, sensors.as_ref()) {",
+          "count": 1
+        },
+        {
+          "name": "final projection also covers homing hold mouth and non-policy paths",
+          "old": "        match safety.apply(targets, hold, gain) {",
+          "new": "        duck_control::morphology::current().project_positions(&mut targets);\n        duck_control::morphology::current().project_positions(&mut hold);\n        match safety.apply(targets, hold, gain) {",
+          "count": 1
+        },
+        {
+          "name": "temperature summary excludes synthetic values",
+          "old": "            let (hottest, max_c) = slow.temps_c.iter().enumerate().fold(\n                (0usize, f64::MIN),\n                |(best, high), (joint, &t)| {\n                    if t > high { (joint, t) } else { (best, high) }\n                },\n            );\n            let mean_c = slow.temps_c.iter().sum::<f64>() / slow.temps_c.len() as f64;",
+          "new": "            let (hottest, max_c, mean_c) =\n                duck_control::morphology::current().thermal_summary(&slow.temps_c);",
+          "count": 1
+        },
+        {
+          "name": "local diagnostics without modifying IPC enum",
+          "old": "        let call = request.as_call();\n\n        // Notifications get no reply",
+          "new": "        let call = request.as_call();\n        // Ordinary calls keep the original decoder and fast path. Decode an envelope\n        // only for an unknown/invalid call; do not depend on private Request fields.\n        if call.is_err() {\n            let envelope = serde_json::to_value(&request).unwrap_or(serde_json::Value::Null);\n            let method = envelope.get(\"method\").and_then(serde_json::Value::as_str).unwrap_or(\"\");\n            if envelope.get(\"jsonrpc\").and_then(serde_json::Value::as_str) == Some(\"2.0\")\n                && matches!(method, \"robot.morphology\" | \"robot.morphology.rearm\")\n            {\n                if let Some(id) = request.id.clone() {\n                    let empty_params = envelope.get(\"params\").is_none_or(|p| {\n                        p.is_null() || p.as_object().is_some_and(|o| o.is_empty())\n                    });\n                    let response = if empty_params {\n                        headless::response(&state, &intents, id, method)\n                    } else {\n                        proto::Response::err(Some(id), proto::Error::new(\n                            proto::code::INVALID_PARAMS, \"morphology methods accept no parameters\"))\n                    };\n                    write_line(&mut write_half, &response).await?;\n                }\n                continue;\n            }\n        }\n\n        // Notifications get no reply",
+          "count": 1
+        },
+        {
+          "name": "notification path capability gate",
+          "old": "fn apply_intent(state: &RobotState, intents: &Intents, call: &proto::Call) -> bool {\n    match call {",
+          "new": "fn apply_intent(state: &RobotState, intents: &Intents, call: &proto::Call) -> bool {\n    if headless::refusal(state, intents, call).is_some() { return false; }\n    match call {",
+          "count": 1
+        },
+        {
+          "name": "do listing contains no unsupported skills",
+          "old": "fn do_names(policies: &PolicyNames) -> Vec<String> {\n    let mut names",
+          "new": "fn do_names(policies: &PolicyNames) -> Vec<String> {\n    if duck_control::morphology::current().headless() { return Vec::new(); }\n    let mut names",
+          "count": 1
+        },
+        {
+          "name": "skill queue capability gate",
+          "old": "fn queue_skill(state: &RobotState, intents: &Intents, skill: &str) -> bool {\n    let policies",
+          "new": "fn queue_skill(state: &RobotState, intents: &Intents, skill: &str) -> bool {\n    if duck_control::morphology::current().headless() { return false; }\n    let policies",
+          "count": 1
+        },
+        {
+          "name": "request path returns refusal instead of accepted-but-silent",
+          "old": "    call: &proto::Call,\n) -> proto::Response {\n    match call {",
+          "new": "    call: &proto::Call,\n) -> proto::Response {\n    if let Some(reason) = headless::refusal(state, intents, call) {\n        // robot.look normally returns LookResult, not IntentResult: use a JSON-RPC\n        // error rather than an incorrectly shaped successful result for that method.\n        if matches!(call, proto::Call::RobotLook(_)) {\n            return proto::Response::err(Some(id), proto::Error::new(proto::code::INVALID_PARAMS, reason));\n        }\n        return proto::Response::ok(Some(id), &proto::IntentResult::refused(reason));\n    }\n    match call {",
+          "count": 1
+        },
+        {
+          "name": "capability listing excludes every whole-body skill",
+          "old": "fn skills_report(state: &RobotState) -> proto::SkillsResult {\n    let configured",
+          "new": "fn skills_report(state: &RobotState) -> proto::SkillsResult {\n    if duck_control::morphology::current().headless() {\n        return proto::SkillsResult { skills: Vec::new(), built_in: Vec::new() };\n    }\n    let configured",
+          "count": 1
+        },
+        {
+          "name": "subscription does not advertise disabled skills",
+          "old": "                    sitstand: policies.sitstand.clone(),\n                    ground_pick: policies.ground_pick.clone(),\n                    skills: policies.skills.clone(),",
+          "new": "                    sitstand: if duck_control::morphology::current().headless() { None } else { policies.sitstand.clone() },\n                    ground_pick: if duck_control::morphology::current().headless() { None } else { policies.ground_pick.clone() },\n                    skills: if duck_control::morphology::current().headless() { Vec::new() } else { policies.skills.clone() },",
+          "count": 1
+        },
+        {
+          "name": "policy report differentiates loaded slots from executable skills",
+          "old": "                skills: state.policies.load().skills.clone(),",
+          "new": "                skills: if duck_control::morphology::current().headless() { Vec::new() } else { state.policies.load().skills.clone() },",
+          "count": 1
+        }
+      ]
+    }
+  }
+}

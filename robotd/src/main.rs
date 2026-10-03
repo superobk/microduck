@@ -20,6 +20,7 @@
 
 mod chorale;
 mod control;
+mod headless;
 mod intents;
 mod params;
 mod soc;
@@ -797,6 +798,13 @@ impl RobotState {
         // A daemon that came up but cannot run its policy is not healthy, however well the
         // loop is ticking. This is what makes the updater roll back a release whose bundle
         // is wrong, instead of leaving a robot that holds a pose and never walks again.
+        // Healthy bus/timing does not clear a fixed-head inference/fall latch.
+        // Expose the same stop reason through the existing health wire schema.
+        if duck_control::morphology::current().headless() {
+            if let Some(reason) = headless::current_fault_reason() {
+                return unhealthy(reason.to_owned());
+            }
+        }
         if let Some(reason) = self.policy_error.load_full() {
             return unhealthy(format!("policy unavailable: {reason}"));
         }
@@ -935,6 +943,12 @@ async fn main() -> ExitCode {
         .with_writer(std::io::stderr)
         .init();
 
+    if let Err(e) = duck_control::morphology::initialize_from_env() {
+        tracing::error!(error = %e, "bad morphology; no motor bus has been opened");
+        return ExitCode::FAILURE;
+    }
+    tracing::warn!(report = %duck_control::morphology::current().report(), "physical morphology");
+
     let explicit = args.params.is_some();
     let params_path = args
         .params
@@ -954,7 +968,34 @@ async fn main() -> ExitCode {
         params.policy.enabled = false;
     }
 
+    if duck_control::morphology::current().headless() {
+        if args.sim.is_some() {
+            tracing::error!(
+                "headless --sim needs a matching locked-body simulator; use --fake for software-only tests"
+            );
+            return ExitCode::FAILURE;
+        }
+        if params.policy.mode != Mode::Walk {
+            tracing::error!("headless profile requires policy.mode=walk");
+            return ExitCode::FAILURE;
+        }
+        // Replace the full-body limp -> automatic rise handoff with an explicit latch.
+        params.safety.limp_fall = false;
+    }
     if let Some(Command::Init { duration }) = args.command {
+        // The standalone init opens a new process and has no fresh IMU/latch
+        // state from the daemon. On the fixed-head body it would bypass the
+        // reviewed fault gate; use robot.init on the running daemon instead.
+        if duck_control::morphology::current().headless() {
+            tracing::error!(
+                "headless standalone init refused: use the daemon robot.init sensor/fault gate"
+            );
+            return ExitCode::FAILURE;
+        }
+        if !duck_control::morphology::current().motion_allowed() {
+            tracing::error!("bench-only morphology refuses init: allow_motion is false");
+            return ExitCode::FAILURE;
+        }
         // init opens the motor bus itself. Keep ownership until the whole ramp returns,
         // so neither a daemon nor another init can join it partway through.
         let _instance_lock = match claim_lock(&args.socket) {
@@ -2015,7 +2056,8 @@ async fn control_loop<T: RobotIo>(
 
         let read_at = proto::clock::monotonic_ns();
         let fresh = match safety.read() {
-            Ok(sensors) => {
+            Ok(mut sensors) => {
+                duck_control::morphology::current().project_sensors(&mut sensors);
                 state.consecutive_errors.store(0, Ordering::Relaxed);
                 sensors_read_ns = read_at;
                 Some(sensors)
@@ -2068,6 +2110,14 @@ async fn control_loop<T: RobotIo>(
         }
         state.fallen.store(safety.fallen(), Ordering::Relaxed);
 
+        if headless::enforce_stop(&mut safety, &state, &intents, fresh.as_ref()) {
+            bringup = Bringup::Limp;
+            was_driving = false;
+            hold = coast.known_positions(hold);
+            if let Some(c) = controller.as_mut() {
+                c.reset();
+            }
+        }
         let snapshot = intents.snapshot();
         let (gated, deadman) = safety.gate(snapshot.command, snapshot.twist_age);
         let mut limits: Vec<duck_control::safety::Limit> = deadman.into_iter().collect();
@@ -2149,7 +2199,7 @@ async fn control_loop<T: RobotIo>(
         // leg while one reboots is not a robot to leave standing.
         if let Some(ids) = intents.take_reboot_motors() {
             let ids: Vec<u8> = if ids.is_empty() {
-                duck_control::model::JOINT_IDS.to_vec()
+                duck_control::morphology::current().motor_ids()
             } else {
                 ids
             };
@@ -2950,6 +3000,8 @@ async fn control_loop<T: RobotIo>(
             1.0
         };
 
+        let mut command = command;
+        duck_control::morphology::current().project_command(&mut command);
         let (mut targets, gain, moving, policy_label) = match (driving, sensors.as_ref()) {
             // The limp-fall sequence, before anything else — `driving` is false throughout,
             // so without this it would fall through to the hold branch and the robot would
@@ -2995,6 +3047,15 @@ async fn control_loop<T: RobotIo>(
                     ),
                     Err(e) => {
                         tracing::warn!(error = %e, "inference failed; holding");
+                        if duck_control::morphology::current().headless() {
+                            // A stale hold pose after failed inference is not balancing
+                            // this modified body. Latch and cut torque in the same tick;
+                            // Full15 retains its original error behavior.
+                            headless::inference_failed(&mut safety, &intents);
+                            bringup = Bringup::Limp;
+                            was_driving = false;
+                            controller.reset();
+                        }
                         (hold, policy_cfg.gain, false, "held".into())
                     }
                 }
@@ -3194,6 +3255,8 @@ async fn control_loop<T: RobotIo>(
                 duck_control::model::mouth_target(snapshot.mouth);
         }
 
+        duck_control::morphology::current().project_positions(&mut targets);
+        duck_control::morphology::current().project_positions(&mut hold);
         match safety.apply(targets, hold, gain) {
             Ok(applied) => limits.extend(applied.limits),
             Err(e) => tracing::warn!(error = %e, "bus write failed"),
@@ -3448,13 +3511,8 @@ fn publish_slow_sensors<T: RobotIo>(io: &mut Safety<T>, state: &RobotState) {
             // Temperature is not smoothed: a servo's case is already a slow signal, and an
             // EMA would only delay the one reading anybody cares about — the joint climbing
             // towards its overheat shutdown.
-            let (hottest, max_c) = slow.temps_c.iter().enumerate().fold(
-                (0usize, f64::MIN),
-                |(best, high), (joint, &t)| {
-                    if t > high { (joint, t) } else { (best, high) }
-                },
-            );
-            let mean_c = slow.temps_c.iter().sum::<f64>() / slow.temps_c.len() as f64;
+            let (hottest, max_c, mean_c) =
+                duck_control::morphology::current().thermal_summary(&slow.temps_c);
             state.motor_max_c.store(max_c.to_bits(), Ordering::Relaxed);
             state
                 .motor_mean_c
@@ -3704,6 +3762,37 @@ async fn handle(
         };
 
         let call = request.as_call();
+        // Ordinary calls keep the original decoder and fast path. Decode an envelope
+        // only for an unknown/invalid call; do not depend on private Request fields.
+        if call.is_err() {
+            let envelope = serde_json::to_value(&request).unwrap_or(serde_json::Value::Null);
+            let method = envelope
+                .get("method")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if envelope.get("jsonrpc").and_then(serde_json::Value::as_str) == Some("2.0")
+                && matches!(method, "robot.morphology" | "robot.morphology.rearm")
+            {
+                if let Some(id) = request.id.clone() {
+                    let empty_params = envelope
+                        .get("params")
+                        .is_none_or(|p| p.is_null() || p.as_object().is_some_and(|o| o.is_empty()));
+                    let response = if empty_params {
+                        headless::response(&state, &intents, id, method)
+                    } else {
+                        proto::Response::err(
+                            Some(id),
+                            proto::Error::new(
+                                proto::code::INVALID_PARAMS,
+                                "morphology methods accept no parameters",
+                            ),
+                        )
+                    };
+                    write_line(&mut write_half, &response).await?;
+                }
+                continue;
+            }
+        }
 
         // Notifications get no reply, per the spec. Continuous intents arrive this way —
         // at 50 Hz a response per message would be pure overhead, and there is nothing
@@ -3748,6 +3837,9 @@ async fn handle(
 /// client that sends `robot.move` with an `id` is not silently ignored — the spec permits
 /// either, and refusing one because of a framing choice would be a surprise.
 fn apply_intent(state: &RobotState, intents: &Intents, call: &proto::Call) -> bool {
+    if headless::refusal(state, intents, call).is_some() {
+        return false;
+    }
     match call {
         proto::Call::RobotMove(p) => {
             intents.set_twist([p.vx, p.vy, p.vyaw]);
@@ -3867,6 +3959,12 @@ fn already_loaded(
 /// `ground_pick` writes a scripted phase and `sit_toggle` is latched. A client offering "what can
 /// this robot do" needs both lists, and would otherwise conclude those two do not exist.
 fn skills_report(state: &RobotState) -> proto::SkillsResult {
+    if duck_control::morphology::current().headless() {
+        return proto::SkillsResult {
+            skills: Vec::new(),
+            built_in: Vec::new(),
+        };
+    }
     let configured = params::Params::load(&state.config_path, false)
         .map(|p| p.policy.clone())
         .unwrap_or_default();
@@ -4263,6 +4361,9 @@ fn load_policy_request(
 /// Both are conditional on the policy behind them being loaded, because a robot whose `sitstand`
 /// slot is switched off genuinely cannot sit.
 fn do_names(policies: &PolicyNames) -> Vec<String> {
+    if duck_control::morphology::current().headless() {
+        return Vec::new();
+    }
     let mut names: Vec<String> = Vec::new();
     if policies.ground_pick.is_some() {
         names.push("ground_pick".to_owned());
@@ -4275,6 +4376,9 @@ fn do_names(policies: &PolicyNames) -> Vec<String> {
 }
 
 fn queue_skill(state: &RobotState, intents: &Intents, skill: &str) -> bool {
+    if duck_control::morphology::current().headless() {
+        return false;
+    }
     let policies = state.policies.load();
     match skill {
         "ground_pick" if policies.ground_pick.is_some() => {
@@ -4301,6 +4405,17 @@ fn dispatch(
     id: proto::Id,
     call: &proto::Call,
 ) -> proto::Response {
+    if let Some(reason) = headless::refusal(state, intents, call) {
+        // robot.look normally returns LookResult, not IntentResult: use a JSON-RPC
+        // error rather than an incorrectly shaped successful result for that method.
+        if matches!(call, proto::Call::RobotLook(_)) {
+            return proto::Response::err(
+                Some(id),
+                proto::Error::new(proto::code::INVALID_PARAMS, reason),
+            );
+        }
+        return proto::Response::ok(Some(id), &proto::IntentResult::refused(reason));
+    }
     match call {
         proto::Call::RobotMove(_)
         | proto::Call::RobotHead(_)
@@ -4485,7 +4600,11 @@ fn dispatch(
                     .to_owned(),
                 enabled: state.policy_enabled,
                 slots: state.policy_slots.load().as_ref().clone(),
-                skills: state.policies.load().skills.clone(),
+                skills: if duck_control::morphology::current().headless() {
+                    Vec::new()
+                } else {
+                    state.policies.load().skills.clone()
+                },
                 // The same flag `robot.do` refuses on, so a client can wait for it rather than
                 // be told no and guess whether asking again would help.
                 homed: Some(state.homed.load(Ordering::Relaxed)),
@@ -4614,9 +4733,21 @@ fn dispatch(
                     accepted: true,
                     walk: policies.walk.clone(),
                     stand: policies.stand.clone(),
-                    sitstand: policies.sitstand.clone(),
-                    ground_pick: policies.ground_pick.clone(),
-                    skills: policies.skills.clone(),
+                    sitstand: if duck_control::morphology::current().headless() {
+                        None
+                    } else {
+                        policies.sitstand.clone()
+                    },
+                    ground_pick: if duck_control::morphology::current().headless() {
+                        None
+                    } else {
+                        policies.ground_pick.clone()
+                    },
+                    skills: if duck_control::morphology::current().headless() {
+                        Vec::new()
+                    } else {
+                        policies.skills.clone()
+                    },
                     unavailable: state.policy_error.load_full().map_or_else(
                         || {
                             policies.walk.is_none().then(|| {

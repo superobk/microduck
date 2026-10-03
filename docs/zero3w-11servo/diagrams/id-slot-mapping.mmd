@@ -1,0 +1,14 @@
+flowchart TD
+  left["左腿 ID20–24<br/>逻辑槽0–4 / 动作0–4"]
+  right["右腿 ID10–14<br/>逻辑槽10–14 / 动作9–13"]
+  slots["15逻辑槽保持原顺序<br/>缺失头颈槽5–8不删除"]
+  head["头颈 ID30–33<br/>虚拟HOME / 不在物理总线"]
+  policy["原策略14动作<br/>嘴槽9不在策略动作中"]
+  mouth["嘴 ID34 / 逻辑槽9<br/>独立执行器"]
+  physical["物理打包：20–24,34,10–14<br/>合并读取前加IMU200"]
+  left -->|"回填"| slots
+  right -->|"不前移"| slots
+  head -->|"投影"| slots
+  slots -->|"排除嘴"| policy
+  policy -->|"scatter/pack"| physical
+  mouth -->|"独立嘴命令"| physical

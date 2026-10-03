@@ -1,0 +1,16 @@
+flowchart TD
+  pre["审计只读预检<br/>身份/实际路径/模型/Runtime"]
+  ssh["SSH关闭或身份不明<br/>停止，保留失败；不猜目标"]
+  backup["独立RUN目录 + 备份<br/>记录原服务状态/文件哈希"]
+  install["校验SCP + 安装独立候选<br/>官方程序不覆盖；安全hold"]
+  fake["隔离fake验收<br/>候选硬件服务持续STOPPED"]
+  rollback["只移除本次候选unit<br/>哈希漂移先停止审查"]
+  missing["仍缺头颈：保留本次安全hold<br/>明确部分回退，不重启"]
+  full["全部15机械已恢复且人在场确认<br/>可移除本次hold，仍不自动启动"]
+  pre -->|"失败"| ssh
+  pre -->|"核对/供电隔离"| backup
+  backup -->|"review通过"| install
+  install -->|"退出0"| fake
+  fake -->|"需回退"| rollback
+  rollback -->|"11设备"| missing
+  rollback -->|"full15-restored"| full
