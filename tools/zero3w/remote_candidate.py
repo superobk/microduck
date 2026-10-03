@@ -100,14 +100,20 @@ def fake(root):
                     if p.poll() is not None or time.monotonic()>deadline:raise RuntimeError('fake daemon did not start; inspect fake-runtime.log')
                     time.sleep(.05)
                 report=rpc(sock,'robot.morphology')['result']
-                hello=rpc(sock,'hello')['result']
+                while not report['imu_ready']:
+                    if time.monotonic()>deadline:raise RuntimeError('fake loop did not publish ready sensors')
+                    time.sleep(.05);report=rpc(sock,'robot.morphology')['result']
+                health=rpc(sock,'robot.health')['result']
+                assert health['healthy'] and health['control_loop']['ticks']>0,health
+                # Pinned v0.15.0's HelloParams requires api_version (shared ABI37).
+                hello=rpc(sock,'hello',{'api_version':37})['result']
                 installed=json.loads((root/'installed.json').read_text())
                 assert hello['revision']==installed['source_commit'],'running binary revision differs from candidate manifest'
                 assert report['active_motor_ids']==[20,21,22,23,24,34,10,11,12,13,14]
                 assert report['policy_observation_width']==61 and report['policy_action_width']==14
                 for method,params in [('robot.enable',{'on':True}),('robot.init',{}),('robot.head',{'neck_pitch':.1,'head_pitch':.1,'head_yaw':.1,'head_roll':.1}),('robot.do',{'skill':'roulade'})]:
                     assert rpc(sock,method,params)['result']['accepted'] is False
-                result={'kind':'board_isolated_fake_no_bus_no_onnx','pass':True,'hello':hello,'morphology':report}
+                result={'kind':'board_isolated_fake_no_bus_no_onnx','pass':True,'hello':hello,'health':health,'morphology':report}
                 print(json.dumps(result));dump(root/f'fake-result-{time.time_ns()}.json',result)
             finally:
                 p.terminate()

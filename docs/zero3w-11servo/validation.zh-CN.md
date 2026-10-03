@@ -16,6 +16,7 @@ RUN_ID：`zero3w-11servo-20261004T014630+0800`。完整日志位于工作区 `lo
 | ARM Linux/glibc2.31构建 | 通过 | Rust1.89、cargo-zigbuild/Zig0.13；最终提交嵌入revision重新构建 |
 | Linux ARM PTY普通协议 | 10/11/15三组通过 | 实际候选binary；IMU/motor读顺序、按ID回填/打包 |
 | Linux ARM PTY Fast Sync Read | 10/11/15三组通过 | 独立0x8A复合状态与runningCRC；不是从普通协议推断 |
+| Linux候选fake与嵌入revision | 通过 | ARM容器执行与板端相同例程：ready、health、ABI37、revision；不是板端验收 |
 | Linux PTY故障/复位 | 10/11 profile通过 | 掉线ID13、请求/通知门禁、ACK但OFF回读为ON、重试、拒绝/成功复位；15只回归原行为 |
 | 本地9参考模型契约 | 9/9通过 | 文件哈希不变；无板端身份推定 |
 | Rust/Python黄金向量 | 108帧通过 | 最大差5.55e-17 |

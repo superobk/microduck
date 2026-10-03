@@ -1,0 +1,152 @@
+{
+  "candidate_kind": "unmerged_software_candidate_no_hardware_deployment",
+  "base_commit": "a9ec4b2079ef8ee7904014089c885bb07d57d63c",
+  "binary_source_commit": "039cd2927068fb7318c03f4617b1c4aff863347c",
+  "tracking_branch": "zero3w/v015-11servo",
+  "review_base_branch": "zero3w/v015-base",
+  "patch": "headless-v015-r2",
+  "daemon_version": "0.15.0",
+  "api_version": 37,
+  "binary": {
+    "path": "target/aarch64-unknown-linux-gnu/release/robotd",
+    "sha256": "c56142349ca4758884987fd3df97b9b750d552a5dced83a2e5f40c3071d91640",
+    "bytes": 5976544,
+    "arch": "AArch64 Linux ELF PIE",
+    "build_target": "aarch64-unknown-linux-gnu.2.31",
+    "glibc_symbol_versions": [
+      "2.17",
+      "2.18",
+      "2.25",
+      "2.27",
+      "2.28",
+      "2.29"
+    ],
+    "embedded_revision_verified_via_hello": true
+  },
+  "toolchain": {
+    "rust": "1.89.0",
+    "cargo_zigbuild": "0.20.1",
+    "zig": "0.13.0",
+    "python_onnxruntime": "1.23.2",
+    "mujoco": "3.3.7",
+    "docker_image": "python:3.12-slim-bookworm",
+    "docker_digest": "sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3"
+  },
+  "status": {
+    "human_review": "pending",
+    "full_workspace_no_exclusions": "pending_environment_DNS_negative_case",
+    "remote_preflight": "blocked_before_ssh_authentication",
+    "hardware_service_installed": false,
+    "hardware_tests_run": false,
+    "hardware_motion_pass_count": 0,
+    "reference_interface_models": 9,
+    "reference_basic_simulation_passes": 3
+  },
+  "immutable_baseline_files": [
+    {
+      "path": "duck-control/src/model.rs",
+      "sha256": "a94830cf411f3159b9bd6def017cd4481b007e860fe5f378ffd2d483237babee"
+    },
+    {
+      "path": "duck-control/src/obs.rs",
+      "sha256": "9545dae40e6a324cea153d2dc8d79563ba105c348f96e00128fb2e55d27f26a6"
+    },
+    {
+      "path": "duck-control/src/policy.rs",
+      "sha256": "ffdc144a97ccec60a725ebae5a534b054af4f4e8b2f1d247f648fcf00cde8014"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "5ec8a5baf6bcd2eea24df57be3cac2bc254be2c7703ec7d373d4f7d5f3f1f919"
+    },
+    {
+      "path": "duck-ipc-proto/Cargo.toml",
+      "sha256": "c34af99463e6349590b27fb6e99f26cb9f0233020eb0e0e35a1d4ef7b39d938e"
+    },
+    {
+      "path": "duck-ipc-proto/src/lib.rs",
+      "sha256": "53483806ed6b76eeccdf7930e879ed90fbaa4e8c3b290c4995d4668ab1df74df"
+    },
+    {
+      "path": "robotd-params/Cargo.toml",
+      "sha256": "fef345ddab3c69cf787360a59e9f5bcad19195a82b72746ddcfc05e25e455001"
+    },
+    {
+      "path": "robotd-params/src/edit.rs",
+      "sha256": "c93cb7b2da1ba4f48eff1cc9313d21c4e483b0db7d2a0db8d4c5eb87df642635"
+    },
+    {
+      "path": "robotd-params/src/lib.rs",
+      "sha256": "c2a4cf9cb101b094c644764a063c6fb206f18a91105b98ccef484311bb8f06be"
+    },
+    {
+      "path": "robotd-params/src/registry.rs",
+      "sha256": "636a95dee821f8e0cb88c8e622dbc53008dd2847b3741cf63655b908959c6233"
+    }
+  ],
+  "local_reference_onnx": [
+    {
+      "file": "alpha_ground_pick.onnx",
+      "sha256": "ffbf5109982ff999b0ba53afe86b9ae731bbec679d67fb7f8ab4c52152c88872",
+      "unchanged": true
+    },
+    {
+      "file": "alpha_sitstand.onnx",
+      "sha256": "c6c40e35e726eabd803d633e090d112994f469921152448367953fbaf9799bc8",
+      "unchanged": true
+    },
+    {
+      "file": "alpha_stand.onnx",
+      "sha256": "1569268713e40deea795dd2922dba50d3621e15a872855408b6b1b125b1c094b",
+      "unchanged": true
+    },
+    {
+      "file": "alpha_walking.onnx",
+      "sha256": "e36332d383997d51401897734cd3e79cf5038406feddb18b4d57ecfb141daa6c",
+      "unchanged": true
+    },
+    {
+      "file": "ball_kick_left.onnx",
+      "sha256": "d6928284dccd3dd61e08bf2f760effa74309fbefd97b2b31afb2a60f526d196a",
+      "unchanged": true
+    },
+    {
+      "file": "ball_kick_right.onnx",
+      "sha256": "147a32c388c6b19111b3ac3b550a9a6dc8b8bf267118af4d8c3712522eedb5af",
+      "unchanged": true
+    },
+    {
+      "file": "roller.onnx",
+      "sha256": "cf05651d2708a2f9364212e86b866c97a70ace8131c492500105e8f28bf99afd",
+      "unchanged": true
+    },
+    {
+      "file": "roller_crouch.onnx",
+      "sha256": "a1a084be240469c76ac9d3fa44d4792f16d4b1da60398b3ecd3cfc5e2244d990",
+      "unchanged": true
+    },
+    {
+      "file": "roulade.onnx",
+      "sha256": "3d60da08fc13f29c1b57f41977aa898132c0d60042100149d8e775affcbca32b",
+      "unchanged": true
+    }
+  ],
+  "migration_script_sha256": "99f6b923893d8498f1a6f1ab598b0378da527fc88014b556481051ba5252c70d",
+  "configuration_helper_sha256": "0dea13bc4e5194797e3ea31ca79af46ea50abb5bc687fede4b22500ed31b768e",
+  "tested_operations": {
+    "workspace": "184435-2563f8e8",
+    "rust_fmt": "184847-6cc614f0",
+    "python_30": "183124-abc0aae6",
+    "analyzer_17": "183156-488b4301",
+    "audit_deploy_5": "185244-2d526aa2",
+    "runtime_policy_8": "182749-e23c885e",
+    "runtime_controller_1": "183239-9da76ce9",
+    "rust_fake_inference": "184559-9738c182",
+    "reference_physics": "181752-e110d867",
+    "arm_build": "184935-93954dd3",
+    "arm_pty": "185045-0f220af4",
+    "linux_candidate_fake": "185243-f0f3dd87",
+    "remote_preflight_failure": "182522-216e3691"
+  },
+  "artifact_scope_note": "Subsequent changes to migration helper and documentation are identified by content hash; compiled Rust matches binary_source_commit exactly."
+}
