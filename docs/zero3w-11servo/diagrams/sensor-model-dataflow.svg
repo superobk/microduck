@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1010" viewBox="0 0 1120 1010"><title>传感器到原模型的数据流</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10z" fill="#356383"/></marker></defs>
+<rect width="100%" height="100%" fill="#f7fafc"/>
+<text x="85" y="30" font-family="sans-serif" font-size="23" font-weight="bold" fill="#18354b">传感器到原模型的数据流</text>
+<path d="M300,133 L300,159.0 L300,159.0 L300,185" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="307.0" y="153.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">按ID回填</text>
+<path d="M820,133 L820,159.0 L300,159.0 L300,185" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="567.0" y="153.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">仅虚拟缺失槽</text>
+<path d="M300,263 L300,289.0 L300,289.0 L300,315" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="307.0" y="283.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">f32</text>
+<path d="M300,393 L300,419.0 L300,419.0 L300,445" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="307.0" y="413.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">有限值</text>
+<path d="M515,473 L605,473" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="560.0" y="463" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">完整保留</text>
+<path d="M1035,495 L1090,495 L1090,205 L515,205" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="802.5" y="198" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">下一帧</text>
+<path d="M300,523 L300,549.0 L300,549.0 L300,575" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="307.0" y="543.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">跳过嘴</text>
+<path d="M300,653 L300,679.0 L300,679.0 L300,705" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="307.0" y="673.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">投影</text>
+<path d="M300,783 L300,809.0 L300,809.0 L300,835" fill="none" stroke="#356383" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="307.0" y="803.0" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#356383">物理集合</text>
+<rect x="85" y="55" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="85" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">IMU200 + 11真实舵机</text>
+<text x="300" y="109" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">读取、有限值与新鲜度检查</text>
+<rect x="605" y="55" width="430" height="78" rx="12" fill="#fff3de" stroke="#5681a0"/>
+<text x="820" y="85" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">缺失头颈30–33</text>
+<text x="820" y="109" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">固定HOME，速度/电流0</text>
+<rect x="85" y="185" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="215" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">15逻辑槽 → 跳过嘴 → 61维观测</text>
+<text x="300" y="239" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">HOME仅减一次</text>
+<rect x="85" y="315" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="345" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">原ONNX（文件不变）</text>
+<text x="300" y="369" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">61输入 → 14输出</text>
+<rect x="85" y="445" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="475" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">完整14项模型动作</text>
+<rect x="605" y="445" width="430" height="78" rx="12" fill="#fff3de" stroke="#5681a0"/>
+<text x="820" y="475" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">原始14项 → 下帧历史</text>
+<text x="820" y="499" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">包含未执行的头颈动作</text>
+<rect x="85" y="575" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="605" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">散射15槽 → 原缩放/滤波</text>
+<text x="300" y="629" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">头颈固定目标</text>
+<rect x="85" y="705" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="735" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">仅打包真实ID</text>
+<text x="300" y="759" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">右腿动作9–13</text>
+<rect x="85" y="835" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
+<text x="300" y="865" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">11真实设备写入</text>
+<text x="300" y="889" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">嘴独立命令，故障门禁</text>
+</svg>

@@ -1,0 +1,22 @@
+{
+  "upstream_repository": "pollen-robotics/microduck",
+  "tag": "daemon-v0.15.0",
+  "commit": "a9ec4b2079ef8ee7904014089c885bb07d57d63c",
+  "patch_id": "headless-v015-r1",
+  "modified_original_git_blobs": {
+    "duck-control/src/lib.rs": "ca6f95df16fb2224289b6e49ec4665b363930931",
+    "duck-control/src/bus.rs": "083ab4821681cfc027584d6a97e74c51d3b30195",
+    "robotd/src/control.rs": "a02ec53e517bc30e0993b2a68760266d36147043",
+    "robotd/src/main.rs": "ab574b662e5b1e27b63dbbb6773609cfdd73297e"
+  },
+  "untouched_contract_files": {
+    "duck-control/src/model.rs": "9de7d482f56205df107a4001ff5db08c1c27a8e8",
+    "duck-control/src/obs.rs": "433416d89ea78665ff51fff636cc77161dc2295d"
+  },
+  "named_edit_rules": 47,
+  "expected_anchor_replacements": 49,
+  "weights_included": false,
+  "full_repository_application_verified_here": false,
+  "rust_compile_verified_here": false,
+  "hardware_verified_here": false
+}

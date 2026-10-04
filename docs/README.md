@@ -1,5 +1,9 @@
 # Docs
 
+The [Zero3W 11-servo candidate](zero3w-11servo/README.zh-CN.md) owns the fixed-head
+morphology, its local fault/rearm extension, reference evaluation and stopped-service
+migration procedure on the pinned v0.15.0 branch. It is an unmerged hardware adaptation.
+
 The [README](../README.md) is the front door — what a microduck is, and where to go. If you have
 one in front of you and want to drive it, start at the [cheat sheet](robot/cheatsheet.md).
 

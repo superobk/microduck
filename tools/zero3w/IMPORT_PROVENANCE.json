@@ -1,0 +1,14 @@
+{
+  "base": "a9ec4b2079ef8ee7904014089c885bb07d57d63c",
+  "kits": [
+    "microduck-headless-v015-r1",
+    "microduck-zero3w-rollout-r1"
+  ],
+  "original_edits_sha256": "166932f178dad8f9d3b21622c72b47131b946be31e8a3da20a6ec1299eed09ed",
+  "importer_changes": [
+    "explicit payload allowlist",
+    "reject undeclared files",
+    "ignore Finder metadata"
+  ],
+  "original_packages_modified": false
+}

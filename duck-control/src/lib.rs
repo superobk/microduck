@@ -12,6 +12,7 @@ pub mod fall;
 pub mod imu;
 pub mod io;
 pub mod model;
+pub mod morphology;
 pub mod obs;
 pub mod policy;
 pub mod safety;

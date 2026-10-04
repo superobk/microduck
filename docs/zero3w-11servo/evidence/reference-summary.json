@@ -1,0 +1,816 @@
+{
+  "report_kind": "reference_simulation_not_hardware_certificate",
+  "interface_pass_count": 9,
+  "interface_total": 9,
+  "basic_scenarios": [
+    "stand",
+    "forward",
+    "backward",
+    "left",
+    "right",
+    "yaw_left",
+    "yaw_right",
+    "sit",
+    "rise"
+  ],
+  "simulation_passed_scenarios": [
+    "stand",
+    "sit",
+    "rise"
+  ],
+  "simulation_pass_count": 3,
+  "hardware_pass_count": 0,
+  "golden": {
+    "frames": 108,
+    "maximum_abs_delta": 5.551115123125783e-17,
+    "pass": true,
+    "tolerance": 2e-06
+  },
+  "episodes": [
+    {
+      "case": "stand",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        0.003664796605203978,
+        -0.0024329958161914598
+      ],
+      "measured_final_yaw_rad": -0.02163126682291171,
+      "final_height_m": 0.11609352389177229,
+      "tilt_p95_deg": 2.5684911478854424,
+      "trace": "locked-stand-seed0.jsonl"
+    },
+    {
+      "case": "stand",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        0.0035530287222465184,
+        -0.002658423746538096
+      ],
+      "measured_final_yaw_rad": -0.02276833807314521,
+      "final_height_m": 0.11611567133206442,
+      "tilt_p95_deg": 2.5703618890194524,
+      "trace": "locked-stand-seed1.jsonl"
+    },
+    {
+      "case": "stand",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        0.003786590849959965,
+        -0.0026388486380559475
+      ],
+      "measured_final_yaw_rad": -0.01964087357959423,
+      "final_height_m": 0.11609056877415216,
+      "tilt_p95_deg": 2.5692182236799312,
+      "trace": "locked-stand-seed2.jsonl"
+    },
+    {
+      "case": "forward",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.004757989363430321,
+        -0.0011910206343831282
+      ],
+      "measured_final_yaw_rad": -0.021815620323987577,
+      "final_height_m": 0.11597772720639969,
+      "tilt_p95_deg": 2.726249579576063,
+      "trace": "locked-forward-seed0.jsonl"
+    },
+    {
+      "case": "forward",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.004933905178152638,
+        -0.0014244352227121464
+      ],
+      "measured_final_yaw_rad": -0.02294659237795492,
+      "final_height_m": 0.11598940532021834,
+      "tilt_p95_deg": 2.7311447847122965,
+      "trace": "locked-forward-seed1.jsonl"
+    },
+    {
+      "case": "forward",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.004693244702473004,
+        -0.0013959004215758361
+      ],
+      "measured_final_yaw_rad": -0.023524470968575673,
+      "final_height_m": 0.1159606348249433,
+      "tilt_p95_deg": 2.7275247681674606,
+      "trace": "locked-forward-seed2.jsonl"
+    },
+    {
+      "case": "backward",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.003229393897019334,
+        -0.002559273143681553
+      ],
+      "measured_final_yaw_rad": -0.008943923895647073,
+      "final_height_m": 0.11614927131488588,
+      "tilt_p95_deg": 2.3774791921773155,
+      "trace": "locked-backward-seed0.jsonl"
+    },
+    {
+      "case": "backward",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.003113553423556264,
+        -0.0026578669625227334
+      ],
+      "measured_final_yaw_rad": -0.008818584897048216,
+      "final_height_m": 0.11615448910471221,
+      "tilt_p95_deg": 2.3769926184897012,
+      "trace": "locked-backward-seed1.jsonl"
+    },
+    {
+      "case": "backward",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.0031647239606788793,
+        -0.002749628368756466
+      ],
+      "measured_final_yaw_rad": -0.004974020145605059,
+      "final_height_m": 0.11615560267339348,
+      "tilt_p95_deg": 2.3751059540669206,
+      "trace": "locked-backward-seed2.jsonl"
+    },
+    {
+      "case": "left",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.004463242146801558,
+        -0.002226438300531086
+      ],
+      "measured_final_yaw_rad": -0.024432801722547148,
+      "final_height_m": 0.11602503496486143,
+      "tilt_p95_deg": 2.5672688942703563,
+      "trace": "locked-left-seed0.jsonl"
+    },
+    {
+      "case": "left",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.004531134666628463,
+        -0.002349508404886815
+      ],
+      "measured_final_yaw_rad": -0.02485577961366239,
+      "final_height_m": 0.11599825972305347,
+      "tilt_p95_deg": 2.5686839966023127,
+      "trace": "locked-left-seed1.jsonl"
+    },
+    {
+      "case": "left",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.004576044939509949,
+        -0.0023614368433782463
+      ],
+      "measured_final_yaw_rad": -0.02282530502413278,
+      "final_height_m": 0.1160179647987645,
+      "tilt_p95_deg": 2.5648493171953115,
+      "trace": "locked-left-seed2.jsonl"
+    },
+    {
+      "case": "right",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.003999335214501606,
+        -0.0009879593214421173
+      ],
+      "measured_final_yaw_rad": -0.0026374857304805005,
+      "final_height_m": 0.11608782522431021,
+      "tilt_p95_deg": 2.5761176899123397,
+      "trace": "locked-right-seed0.jsonl"
+    },
+    {
+      "case": "right",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.003804680388870897,
+        -0.0009359362325650857
+      ],
+      "measured_final_yaw_rad": -0.002166185988326186,
+      "final_height_m": 0.1161181779179891,
+      "tilt_p95_deg": 2.5773498144429805,
+      "trace": "locked-right-seed1.jsonl"
+    },
+    {
+      "case": "right",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.004050644838265149,
+        -0.0010275252000760938
+      ],
+      "measured_final_yaw_rad": -0.0015378008705815534,
+      "final_height_m": 0.11610617630986465,
+      "tilt_p95_deg": 2.576542223152643,
+      "trace": "locked-right-seed2.jsonl"
+    },
+    {
+      "case": "yaw_left",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.0050452595287864875,
+        0.0022718992053063426
+      ],
+      "measured_final_yaw_rad": 0.028604342028849046,
+      "final_height_m": 0.11590446181268187,
+      "tilt_p95_deg": 2.592707849664796,
+      "trace": "locked-yaw_left-seed0.jsonl"
+    },
+    {
+      "case": "yaw_left",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.0049357456171143085,
+        0.002183803013295669
+      ],
+      "measured_final_yaw_rad": 0.02789722908593347,
+      "final_height_m": 0.11591210089897948,
+      "tilt_p95_deg": 2.592728978947192,
+      "trace": "locked-yaw_left-seed1.jsonl"
+    },
+    {
+      "case": "yaw_left",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.004955307494294885,
+        0.002418538747964663
+      ],
+      "measured_final_yaw_rad": 0.03019389416669837,
+      "final_height_m": 0.11590900811324496,
+      "tilt_p95_deg": 2.590513837685727,
+      "trace": "locked-yaw_left-seed2.jsonl"
+    },
+    {
+      "case": "yaw_right",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.004077241332826138,
+        -0.0041673822755229125
+      ],
+      "measured_final_yaw_rad": -0.04611343719504968,
+      "final_height_m": 0.11615326362798681,
+      "tilt_p95_deg": 2.492916695945777,
+      "trace": "locked-yaw_right-seed0.jsonl"
+    },
+    {
+      "case": "yaw_right",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        0.003908016363730591,
+        -0.004270737541540227
+      ],
+      "measured_final_yaw_rad": -0.05313453206401325,
+      "final_height_m": 0.11615923167964004,
+      "tilt_p95_deg": 2.4878728181972467,
+      "trace": "locked-yaw_right-seed1.jsonl"
+    },
+    {
+      "case": "yaw_right",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.003972657320035777,
+        -0.004309845466180551
+      ],
+      "measured_final_yaw_rad": -0.04393853360669876,
+      "final_height_m": 0.11614225785438011,
+      "tilt_p95_deg": 2.4923930749105927,
+      "trace": "locked-yaw_right-seed2.jsonl"
+    },
+    {
+      "case": "sit",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        -0.0717563397888448,
+        0.009382814551800055
+      ],
+      "measured_final_yaw_rad": 0.05630511264821927,
+      "final_height_m": 0.05950528910229019,
+      "tilt_p95_deg": 1.392039254790687,
+      "trace": "locked-sit-seed0.jsonl"
+    },
+    {
+      "case": "sit",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        -0.07163637754010135,
+        0.00814676834527893
+      ],
+      "measured_final_yaw_rad": 0.057196472964823594,
+      "final_height_m": 0.05950529199027696,
+      "tilt_p95_deg": 1.3920477602772496,
+      "trace": "locked-sit-seed1.jsonl"
+    },
+    {
+      "case": "sit",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        -0.07189392363575596,
+        0.008930607127144996
+      ],
+      "measured_final_yaw_rad": 0.051329191412632265,
+      "final_height_m": 0.05950528873331396,
+      "tilt_p95_deg": 1.392038228120048,
+      "trace": "locked-sit-seed2.jsonl"
+    },
+    {
+      "case": "rise",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        -0.037157740383611526,
+        0.0074536051630913645
+      ],
+      "measured_final_yaw_rad": -0.024504598468789104,
+      "final_height_m": 0.11612046668195344,
+      "tilt_p95_deg": 3.608901611645165,
+      "trace": "locked-rise-seed0.jsonl"
+    },
+    {
+      "case": "rise",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        -0.03289237499685904,
+        0.007157547403680952
+      ],
+      "measured_final_yaw_rad": 0.03207266180470968,
+      "final_height_m": 0.11608548959422081,
+      "tilt_p95_deg": 3.6222108531250337,
+      "trace": "locked-rise-seed1.jsonl"
+    },
+    {
+      "case": "rise",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        -0.03706587203908858,
+        0.0070947645615065
+      ],
+      "measured_final_yaw_rad": -0.08500331174294039,
+      "final_height_m": 0.1161104885692568,
+      "tilt_p95_deg": 3.6058348756394123,
+      "trace": "locked-rise-seed2.jsonl"
+    },
+    {
+      "case": "parking",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.0036978786724930933,
+        -0.0022249715078932397
+      ],
+      "measured_final_yaw_rad": -0.02057088347380867,
+      "final_height_m": 0.11610407078876708,
+      "tilt_p95_deg": 2.6175285275471185,
+      "trace": "locked-parking-seed0.jsonl"
+    },
+    {
+      "case": "parking",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.003603122043422156,
+        -0.0022857005254392367
+      ],
+      "measured_final_yaw_rad": -0.02051873402482977,
+      "final_height_m": 0.11610536174067736,
+      "tilt_p95_deg": 2.605240304708224,
+      "trace": "locked-parking-seed1.jsonl"
+    },
+    {
+      "case": "parking",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.0036834193243631213,
+        -0.00243197954792971
+      ],
+      "measured_final_yaw_rad": -0.02075295837083034,
+      "final_height_m": 0.116103377655483,
+      "tilt_p95_deg": 2.6185928967438103,
+      "trace": "locked-parking-seed2.jsonl"
+    },
+    {
+      "case": "direction_change",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.003794878160515205,
+        -0.002195676967429005
+      ],
+      "measured_final_yaw_rad": -0.01564571975177462,
+      "final_height_m": 0.11610616866702334,
+      "tilt_p95_deg": 2.6175285275471185,
+      "trace": "locked-direction_change-seed0.jsonl"
+    },
+    {
+      "case": "direction_change",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.0036192431388004384,
+        -0.002318431690304994
+      ],
+      "measured_final_yaw_rad": -0.017333383565713796,
+      "final_height_m": 0.11609782620083638,
+      "tilt_p95_deg": 2.605240304708224,
+      "trace": "locked-direction_change-seed1.jsonl"
+    },
+    {
+      "case": "direction_change",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.0036408791461090377,
+        -0.002467332081380805
+      ],
+      "measured_final_yaw_rad": -0.017489369870927998,
+      "final_height_m": 0.11610765111748206,
+      "tilt_p95_deg": 2.6173576272960357,
+      "trace": "locked-direction_change-seed2.jsonl"
+    },
+    {
+      "case": "deadman",
+      "seed": 0,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.0037258867115733496,
+        -0.002110194023881207
+      ],
+      "measured_final_yaw_rad": -0.020062354845200178,
+      "final_height_m": 0.11609818762157652,
+      "tilt_p95_deg": 2.6471340740399496,
+      "trace": "locked-deadman-seed0.jsonl"
+    },
+    {
+      "case": "deadman",
+      "seed": 1,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.003786302692973818,
+        -0.0023562359218374466
+      ],
+      "measured_final_yaw_rad": -0.021832233496451,
+      "final_height_m": 0.11610382872390301,
+      "tilt_p95_deg": 2.630130142619366,
+      "trace": "locked-deadman-seed1.jsonl"
+    },
+    {
+      "case": "deadman",
+      "seed": 2,
+      "locked": true,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.0037658042809951,
+        -0.002336333351691146
+      ],
+      "measured_final_yaw_rad": -0.019409201119464658,
+      "final_height_m": 0.11608819374744224,
+      "tilt_p95_deg": 2.6466039264413155,
+      "trace": "locked-deadman-seed2.jsonl"
+    },
+    {
+      "case": "stand",
+      "seed": 0,
+      "locked": false,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        0.0008632631768437123,
+        -0.0001639531997336534
+      ],
+      "measured_final_yaw_rad": -0.027193424979093685,
+      "final_height_m": 0.11630716962291066,
+      "tilt_p95_deg": 0.7374275483014419,
+      "trace": "full15-stand-seed0.jsonl"
+    },
+    {
+      "case": "stand",
+      "seed": 1,
+      "locked": false,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        0.0009488383171380458,
+        -0.0003423612429169828
+      ],
+      "measured_final_yaw_rad": -0.03122081261775428,
+      "final_height_m": 0.11633580007611366,
+      "tilt_p95_deg": 0.7408527933299145,
+      "trace": "full15-stand-seed1.jsonl"
+    },
+    {
+      "case": "stand",
+      "seed": 2,
+      "locked": false,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": true,
+      "measured_delta_xy_m": [
+        0.000843918703319035,
+        -0.0003238928826199481
+      ],
+      "measured_final_yaw_rad": -0.026209632038672884,
+      "final_height_m": 0.11633164106122938,
+      "tilt_p95_deg": 0.7418024521932789,
+      "trace": "full15-stand-seed2.jsonl"
+    },
+    {
+      "case": "forward",
+      "seed": 0,
+      "locked": false,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.001961176937204161,
+        0.0013666002108063471
+      ],
+      "measured_final_yaw_rad": -0.016939705718955273,
+      "final_height_m": 0.11622693020284158,
+      "tilt_p95_deg": 0.8058073551136005,
+      "trace": "full15-forward-seed0.jsonl"
+    },
+    {
+      "case": "forward",
+      "seed": 1,
+      "locked": false,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.0019365542015718745,
+        0.0013193553444753464
+      ],
+      "measured_final_yaw_rad": -0.0184332306487184,
+      "final_height_m": 0.11623632929494036,
+      "tilt_p95_deg": 0.8049139376329925,
+      "trace": "full15-forward-seed1.jsonl"
+    },
+    {
+      "case": "forward",
+      "seed": 2,
+      "locked": false,
+      "steps": 1500,
+      "duration_s": 30.0,
+      "terminal": null,
+      "simulation_pass": false,
+      "measured_delta_xy_m": [
+        0.0019356321405818264,
+        0.0011490555252088987
+      ],
+      "measured_final_yaw_rad": -0.0179112498425447,
+      "final_height_m": 0.11626264216149529,
+      "tilt_p95_deg": 0.8064160679675184,
+      "trace": "full15-forward-seed2.jsonl"
+    }
+  ],
+  "provenance": {
+    "source_model": "microduck-simulator/app/public/robot/mjlab/robot_allcollisions.xml",
+    "source_model_sha256": "7a6fdf437f5a80c7348ad801f43f906b997a834389cb70cca5e1e8517ba38044",
+    "mesh_hashes": {
+      "ankle_l_v1.stl": "74f9a51e15ac8fef93fc2efa35b61dc53cf832d798f75c3229700bd9b3aed4c4",
+      "ankle_left.stl": "df5d7f04d63390a1e263e0138ee94e1aec2ff2b55cf63729f4ec461b25c1c1f0",
+      "ankle_r_v1.stl": "c200102fb6f067cbec73f048fe2020b127e61d47fcffd7dbd84c90439767fd3f",
+      "ankle_right.stl": "48b8551a13d22cc8752ddf3148796b357a6cbd6e2ecbd93c3ecdfbf55e533e72",
+      "banana_pcb_locker.stl": "2e51f6e23e4dbea660a9dbadcd763bbc77d48a7e3e0a58f047eab45554e07b55",
+      "bearing_roll.stl": "fa0da0a5eef428a41da6e9639f75120781594e600c5db7518621750221669849",
+      "bottom_head_shell.stl": "331a361406e77c05256e5064197f785ac1e9c8f091079a3519c2e33f28ae5ebc",
+      "elec_rpi_robot_hat_pcb.stl": "acc66b75f2ff26f42339577c38c6f348ec73c4fbb52912637ba5244eb1a78ebb",
+      "face_part.stl": "47ad1137a68bf72b2c93f1bf4836f18fb9a8d21a4f8f86fbe761b9871233fcce",
+      "foot_left.stl": "b7749b1f4fd9e7faf8180772d7ce8254139c60bc43aee463ec76afc86212d59c",
+      "foot_right.stl": "e2aba02ec1b949bc8a5a77ad3d0af9009dee80c100aa4bbfcf336f1fa5ef206f",
+      "hip_l.stl": "dbdf6e7f5587385c0f6a77b407931b30e81c9a212dac7c52b4e0884156049056",
+      "jaw.stl": "90afa64e47ef237f0f58d6f4830dc3cd6215328ed8a639b1e1a9eb2157307f4a",
+      "jaw_soft.stl": "6c3ebb578ea5e6d7b995baca9b42ef7c9f9858b56dedf6f0d949f5e6ea9d3ef2",
+      "left_shell.stl": "c31e71e2e55c5daccfef738c80053104ba2fb3589a0836ab1b6ebb5c380a05ae",
+      "leg.stl": "bfbc6ae5faefc56bd65d860cf3410a08e8286717063584f15b56bbd5302b20f8",
+      "lens.stl": "b9b86fce70198040781a739e2c15d2996b549b25d73b7544005ae08a415b486e",
+      "m12_lens_holder.stl": "d96825a096d5d3d5d252086cf0cdb3f5bc22d9f0baef0a3f97a85bae1617be99",
+      "motor_support.stl": "d6725004f0a85a5cf0161214ea0d39fb6f14ee3563c9a96cd5aad725b5e2a716",
+      "neck.stl": "3cb654ee9387d55c7d10d40fc84bb7cbf3cedb3243d1da499cf01c54d366079c",
+      "neck_pitch.stl": "dbd6fcbf8b8f27a8364d5bcae2b9a537d7e384325b44a653b360139b6fa1da2f",
+      "noenoeil.stl": "55f3167627f6fbd1a19966f92396adf2ccd55795b13ded3b9f52705ba8a7ab77",
+      "np_f970.stl": "01fbacc788b53ebb7648cda07090133b8c696da31d700c560f45189494977871",
+      "pcb__raspberry_pi_zero_2_w.stl": "43d8368ced3d623eaa5ef538e8361f5878b85931b7cd469a4488eee7aa00bd91",
+      "power_support.stl": "4aee9ddf8c12478d334f3d8d9e65af712072bef241283a08c895606fc2e3d9e8",
+      "right_shell.stl": "c346581c2e3c2c189ea49372a147dfbc0dca89db4ec02f9f230921e480e762a7",
+      "rim.stl": "a6d58f80ec60041e721cba1de7af5c834700166a5c10e7f68d1a2b79c7b78cb0",
+      "roller_blade.stl": "a8b0e6dbdb593eceaba1a0cc2a70ad8aac56f4c3b22676dbfb97409c1a094615",
+      "seeed_bearing__configuration__22x16x4.stl": "8551dc99cbdc012bd261c2a175f2cc766dd6aed0786781b35f8381cd3aa95b34",
+      "seeed_bearing__configuration_default.stl": "e4338e0e6c7adeb52a35e02d6fa5babe761e8752ffa0fc2e31b0ba672c18630d",
+      "soft_mouth_top.stl": "451f53d30350552cb6e26f777698272f7c3fa557f389adb24f94c75a201e67cd",
+      "sole_left.stl": "357f80bb46855e3ce50f817705acd80471dae90b4ee6b4a0a948614a7daeddb1",
+      "sole_right.stl": "07801107a36dbc1c2b83b3b64ad98be39ba662a8a7fa0b62a29119b201f41fe6",
+      "speaker.stl": "0ef54df86c6093c166d73e33dc0b8364ef5643a7a1b1dacaba577be5a9c06c32",
+      "tire.stl": "14c08d73185a4b521897aca74fb8b2a6d306a20d80e8822aa56cf1b4ace29bec",
+      "top_head_shell.stl": "a59823b8f2ab23d530e6b071559f7fd308851ae035b7cb4d0b7baf7edef4b3e3",
+      "trunk_base.stl": "4b84ebe28041e6236ecafd4a26cebe537e21c14423e6acded3d78478c7650ed7",
+      "upper_leg_left.stl": "a626dafcdd0074fd4e79e604d377495d304d222f1afd27b13487b7248b35a0b8",
+      "upper_leg_right.stl": "97fd516a4c0e593fef9e22b1521d60ca86bd91966a4328db0834bac5ba1cabdf",
+      "upper_leg_rigidity_plate.stl": "96e50158d44ef97fc46f5d6330b6bb02fb93116790ae892a170fdd052e696aba",
+      "xl330.stl": "d3c7b71750397083d3dfbad395fd8ac794763f43e2ea2b5006da5840c976fc82",
+      "yaw2roll.stl": "c20cbdd8a9d52f789ec5a4b0d4a173a225652c6bc4610d555ea309c7a0e0d559",
+      "yaw_roll_motion.stl": "ae3740fde29a261b79650a25825baedd84d538fc67b6b20b79589125e5e05592"
+    },
+    "walk_sha256": "e36332d383997d51401897734cd3e79cf5038406feddb18b4d57ecfb141daa6c",
+    "sitstand_sha256": "c6c40e35e726eabd803d633e090d112994f469921152448367953fbaf9799bc8",
+    "physics_timestep_s": 0.005,
+    "control_hz": 50,
+    "total_mass_kg": 0.7372431799999999,
+    "locked_head_rad": [
+      0.3491,
+      0.3491,
+      0.0,
+      0.0
+    ],
+    "head_actuators_removed": true,
+    "mouth_physics_present": false,
+    "leg_actuators": 10,
+    "assumptions": [
+      "Source mesh/inertias are retained, including mass of originally fitted head servos.",
+      "Physical removed-servo mass, braces, battery position and supply response are unmeasured.",
+      "Offline sit/rise bypass the production skill prohibition only in this isolated harness.",
+      "All policies are local reference files; board identity remains unverified."
+    ],
+    "hardware_verified": false,
+    "source_checkout_commit": "7795ef8b8d64eb6790e8ef7334f7e0497ff32065"
+  }
+}

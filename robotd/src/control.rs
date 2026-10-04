@@ -300,7 +300,7 @@ impl Controller {
     }
 
     pub fn has_sitstand(&self) -> bool {
-        self.policy.has_sitstand()
+        !duck_control::morphology::current().headless() && self.policy.has_sitstand()
     }
 
     /// How long a shutdown sit gets before torque is cut: twice the seat's settle time, which
@@ -325,6 +325,9 @@ impl Controller {
     /// network existing and the move not already running — a pick can even preempt a kick's
     /// tail, and that stays as it was.
     pub fn start_ground_pick(&mut self) -> Result<(), &'static str> {
+        if duck_control::morphology::current().headless() {
+            return Err("whole-body skills disabled by headless morphology");
+        }
         if !self.policy.has_ground_pick() {
             return Err("no ground-pick policy loaded");
         }
@@ -337,6 +340,9 @@ impl Controller {
 
     /// Every one-shot skill this robot has, in priority order — what a client may ask for.
     pub fn skill_names(&self) -> Vec<String> {
+        if duck_control::morphology::current().headless() {
+            return Vec::new();
+        }
         self.skills
             .skills
             .iter()
@@ -355,6 +361,9 @@ impl Controller {
     /// always roll out of a kick's tail or out of the seat. A ground pick blocks everything, as
     /// it always has.
     pub fn start_skill(&mut self, index: usize) -> Result<bool, &'static str> {
+        if duck_control::morphology::current().headless() {
+            return Err("whole-body skills disabled by headless morphology");
+        }
         let Some(def) = self.skills.skills.get(index) else {
             return Err("no such skill on this robot");
         };
@@ -384,6 +393,9 @@ impl Controller {
     /// Sit if standing, stand if sitting. Refused mid-rise, as the prototype refuses it
     /// while a stand transition is in flight.
     pub fn sit_toggle(&mut self) -> Result<&'static str, &'static str> {
+        if duck_control::morphology::current().headless() {
+            return Err("whole-body skills disabled by headless morphology");
+        }
         match self.sit {
             Sit::Up => {
                 if !self.policy.has_sitstand() {
@@ -406,12 +418,18 @@ impl Controller {
     /// seconds, then cut torque and power off); this just puts the sitstand network in
     /// charge with the posture flag at 1.
     pub fn begin_shutdown_sit(&mut self) {
+        if duck_control::morphology::current().headless() {
+            return;
+        }
         self.sit = Sit::Sitting;
     }
 
     /// Seated boot: the robot powered on already sitting, so rise via the sitstand network
     /// instead of dragging the legs through a linear ramp to the standing pose.
     pub fn begin_boot_rise(&mut self) {
+        if duck_control::morphology::current().headless() {
+            return;
+        }
         self.sit = Sit::Rising {
             remaining: self.skills.sitstand_rise_s,
         };
@@ -432,6 +450,23 @@ impl Controller {
         dt: f64,
         scale_mult: f64,
     ) -> Result<Step, PolicyError> {
+        let morphology = duck_control::morphology::current();
+        let mut projected = *sensors;
+        morphology.project_sensors(&mut projected);
+        let sensors = &projected;
+        // The reduced body cannot use fabricated leg/IMU values as a balance
+        // observation. Missing head values were projected above; real values remain.
+        if morphology.headless() && !crate::headless::valid_sensors(sensors) {
+            return Err(PolicyError::Inference(
+                "invalid fixed-head sensor sample".to_owned(),
+            ));
+        }
+        let body_active = body_active && !morphology.headless();
+        if morphology.headless() {
+            self.active = None;
+            self.ground_pick = None;
+            self.sit = Sit::Up;
+        }
         // Expire windows first, so a tick after the deadline runs the next thing rather
         // than one more frame of a finished move — the prototype checks its timers at the
         // same point relative to inference.
@@ -480,7 +515,7 @@ impl Controller {
         // Re-encode the command for the active skill and pick the network. The priority chain
         // is the prototype's, with its three one-shots now one entry: skill > ground pick >
         // sit/rise > stand-by-magnitude > walk, and the skills themselves ordered by config.
-        let (net, effective, label) = if let Some(active) = self.active {
+        let (net, mut effective, label) = if let Some(active) = self.active {
             // Head and body are zeroed whatever the phase — every one-shot published so far
             // declares them unused, and a policy trained with `zero_command_padding` expects
             // exactly that. Only the twist differs, and for most skills it is zero too, which is
@@ -538,6 +573,7 @@ impl Controller {
             }
         };
 
+        morphology.project_command(&mut effective);
         self.last_net = Some(net);
 
         let observation = Observation::build(
@@ -549,6 +585,13 @@ impl Controller {
             &effective,
         );
 
+        // f64 sensor values can be finite yet overflow while narrowed to the
+        // policy's f32 ABI. Refuse before calling ONNX rather than silently clamp.
+        if morphology.headless() && observation.as_slice().iter().any(|x| !x.is_finite()) {
+            return Err(PolicyError::Inference(
+                "non-finite fixed-head observation".to_owned(),
+            ));
+        }
         let action = self.policy.infer(&observation, net)?;
         self.last_action = action;
 
@@ -623,6 +666,14 @@ impl Controller {
                     *target = alpha * *target + (1.0 - alpha) * previous[joint];
                 }
             }
+        }
+        morphology.project_positions(&mut targets);
+        // Catch scaling/filter errors as well as non-finite network output. The
+        // daemon converts this error into a latch before the motor writer runs.
+        if morphology.headless() && targets.iter().any(|q| !q.is_finite()) {
+            return Err(PolicyError::Inference(
+                "non-finite fixed-head target".to_owned(),
+            ));
         }
         self.previous = Some(targets);
 

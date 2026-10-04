@@ -1,0 +1,23 @@
+flowchart TD
+  ready["已就绪 / 受门禁显式启用"]
+  fault["首个故障：跌倒 / 总线 / 推理<br/>无效感知 / 可选重复IMU"]
+  disable["锁止：策略OFF，丢弃排队init<br/>health报告故障"]
+  off["关闭真实设备扭矩并逐ID回读"]
+  retry["失败：未证明已OFF<br/>支撑/物理切电，继续重试"]
+  queued["成功OFF后等待rearm请求<br/>accepted仅表示排队"]
+  judge["控制线程以本tick新鲜样本判定<br/>直立/静止/无错/策略OFF"]
+  refused["未满足：rearm_result=refused<br/>锁止继续"]
+  cleared["cleared 且 fault_latched=false<br/>动力/策略仍OFF"]
+  init["另一次显式daemon init/enable<br/>CLI独立init被拒绝"]
+  ready -->|"异常"| fault
+  fault -->|"同tick"| disable
+  disable -->|"OFF请求"| off
+  off -->|"失败"| retry
+  retry -->|"重试"| off
+  off -->|"全部回读OFF"| queued
+  queued -->|"显式请求"| judge
+  judge -->|"条件不足"| refused
+  refused -->|"仍待人工请求"| queued
+  judge -->|"条件满足"| cleared
+  cleared -->|"人工确认"| init
+  init -->|"门禁再次检查"| ready

@@ -28,3 +28,9 @@ __pycache__/
 # holding `*` so it self-ignores; this is for the person who reaches for `python -m venv`, which
 # does not, and it is the same accident `__pycache__` above was added for.
 .venv/
+
+# Finder metadata is not a reviewed robot source or deployment artifact.
+.DS_Store
+tools/headless-v015-r1/generated*.patch
+tools/headless-v015-r1/local-test-results/
+tools/zero3w/results/

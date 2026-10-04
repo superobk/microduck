@@ -1,0 +1,5 @@
+# CPU-only inference/physics. Installation never trains or re-exports ONNX.
+numpy==2.2.6
+onnx==1.19.0
+onnxruntime==1.23.2
+mujoco==3.3.7
