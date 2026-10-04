@@ -4,7 +4,7 @@ flowchart TD
   run["审计SSH / SCP<br/>启用host-key校验，凭证不入日志"]
   output["流式保存完整输出<br/>失败/断线也保留"]
   after["执行后退出码/UTC/输出SHA<br/>success 或 failed_or_interrupted"]
-  index["日志索引 + 文档证据引用<br/>不把软件试验写成实机通过"]
+  index["自动追加命令增量文档 + 索引<br/>意义/用法/结果/证据/注意事项"]
   intent -->|"归档"| before
   before -->|"落盘后执行"| run
   run -->|"完整输出"| output

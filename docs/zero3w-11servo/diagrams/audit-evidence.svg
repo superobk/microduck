@@ -28,6 +28,6 @@
 <text x="300" y="605" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">执行后退出码/UTC/输出SHA</text>
 <text x="300" y="629" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">success 或 failed_or_interrupted</text>
 <rect x="85" y="705" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
-<text x="300" y="735" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">日志索引 + 文档证据引用</text>
-<text x="300" y="759" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">不把软件试验写成实机通过</text>
+<text x="300" y="735" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">自动追加命令增量文档 + 索引</text>
+<text x="300" y="759" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">意义/用法/结果/证据/注意事项</text>
 </svg>

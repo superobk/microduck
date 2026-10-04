@@ -16,11 +16,13 @@ class AuditTests(unittest.TestCase):
             root=Path(tmp)
             code=run([sys.executable,'-c','print("audited failure");raise SystemExit(7)'],root,'验证失败仍保留证据','不要把失败写作成功')
             self.assertEqual(code,7)
-            d=next(root.iterdir());r=json.loads((d/'operation.json').read_text())
+            d=next(root.glob('*/operation.json')).parent;r=json.loads((d/'operation.json').read_text())
             self.assertEqual(r['exit_code'],7);self.assertEqual(r['status'],'failed_or_interrupted')
             self.assertIn('audited failure',(d/'output.log').read_text())
             self.assertEqual(r['output_sha256'],hashlib.sha256((d/'output.log').read_bytes()).hexdigest())
             self.assertEqual(r['meaning'],'验证失败仍保留证据')
+            ledger=(root/'COMMANDS_INCREMENTAL.md').read_text()
+            self.assertIn('`7`',ledger);self.assertIn(str(d/'operation.json'),ledger)
     def test_nonexistent_command_still_has_record(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);self.assertEqual(run(['/nonexistent/zero3w-command'],root,'不存在的命令','保留错误'),127)

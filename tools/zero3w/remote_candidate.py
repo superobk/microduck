@@ -23,11 +23,12 @@ import importlib.util
 
 BASE='/opt/robot/local/zero3w-11servo'
 CONFIG=Path('/etc/robot/robotd.toml')
-UNITS=['robotd.service','updaterd.service','padd.service','btd.service','mediad.service']
+UNITS=['robotd.service','updaterd.service','configd.service','padd.service','btd.service','tofd.service','mediad.service']
 HOLD='[Unit]\nConditionPathExists=/etc/robot/ZERO3W_FULL15_RESTORED\n'
 UPDATE_HOLD='[Unit]\nConditionPathExists=/etc/robot/ZERO3W_OFFICIAL_UPDATE_REVIEWED\n'
 OWNED={Path('/etc/systemd/system/robotd.service.d/91-zero3w-hold.conf'):HOLD,
        Path('/etc/systemd/system/updaterd.service.d/91-zero3w-hold.conf'):UPDATE_HOLD}
+CANDIDATE_SERVICE=Path('/etc/systemd/system/zero3w-11servo-candidate.service')
 
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 def command(argv,check=True):
@@ -51,6 +52,8 @@ def snapshot():
     for unit in UNITS:
         result=command(['systemctl','show',unit,'--property=ActiveState,SubState,UnitFileState,FragmentPath,DropInPaths,MainPID'],False)
         units[unit]=dict(line.split('=',1) for line in result.stdout.splitlines() if '=' in line)
+        paths=[units[unit].get('FragmentPath',''),*units[unit].get('DropInPaths','').split()]
+        units[unit]['unit_files']=[{'path':name,'resolved':str(Path(name).resolve()),'sha256':sha(name)} for name in paths if name and Path(name).is_file()]
         # Record executable identity of a running daemon without printing argv/env.
         pid=units[unit].get('MainPID','0')
         exe=Path('/proc')/pid/'exe'
@@ -58,8 +61,11 @@ def snapshot():
     params=tomllib.loads(CONFIG.read_text()) if CONFIG.is_file() else {}
     selected={k:params.get(k,{}) for k in ('bus','policy','control','safety')}
     policy_files=[]
-    for p in sorted(Path('/opt/robot/policies').rglob('*.onnx')):
-        if p.is_file():policy_files.append({'path':str(p),'resolved':str(p.resolve()),'sha256':sha(p)})
+    # Path.rglob does not reliably recurse through the deployed current symlink.
+    # Inspect its resolved tree explicitly, deduplicating by physical model path.
+    for directory in [Path('/opt/robot/policies'),Path('/opt/robot/policies/current').resolve()]:
+        for p in sorted(directory.rglob('*.onnx')):
+            if p.is_file() and not any(x['resolved']==str(p.resolve()) for x in policy_files):policy_files.append({'path':str(p),'resolved':str(p.resolve()),'sha256':sha(p)})
     runtimes=[]
     for directory in ['/usr/lib','/usr/local/lib','/opt/robot']:
         for p in Path(directory).glob('**/libonnxruntime.so*'):
@@ -84,6 +90,44 @@ def rpc(path,method,params=None):
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
         s.settimeout(3);s.connect(str(path));s.sendall(json.dumps({'jsonrpc':'2.0','id':1,'method':method,'params':params or {}}).encode()+b'\n')
         return json.loads(s.makefile('rb').readline())
+def candidate_body(root):
+    return f'[Unit]\nDescription=Zero3W fixed-head candidate (stopped)\nConditionPathExists=/etc/robot/ZERO3W_HARDWARE_APPROVED\n[Service]\nType=simple\nEnvironment=MICRODUCK_MORPHOLOGY={root}/morphology.json\nEnvironment=DUCK_RUNTIME_DIR=/run/zero3w-candidate\nExecStart={root}/robotd --params {root}/robotd.toml --socket /run/zero3w-candidate.sock\nRestart=no\n'
+def rollback(root,full15_restored=False):
+    """Repeatable rollback, including interruption before installed.json exists.
+
+    transaction.json is written BEFORE stopping services or creating systemd
+    files. Missing files mean an uncompleted/already undone step, not failure.
+    An existing file must match the recorded ownership hash; drift never grants
+    permission to erase another operator's work. Headless hardware keeps holds.
+    """
+    journal=root/'transaction.json'
+    manifest=root/'installed.json'
+    if not journal.is_file() and not manifest.is_file():
+        print(json.dumps({'rollback':'no systemd transaction begun','official_files_preserved':True}));return
+    source=journal if journal.is_file() else manifest
+    expected=json.loads(source.read_text())['owned_systemd_files']
+    allowed={str(f):hashlib.sha256(text.encode()).hexdigest() for f,text in OWNED.items()}
+    allowed[str(CANDIDATE_SERVICE)]=hashlib.sha256(candidate_body(root).encode()).hexdigest()
+    if expected!=allowed:raise RuntimeError('ownership manifest does not match the exact candidate paths/content')
+    for name,want in expected.items():
+        f=Path(name)
+        if f.is_symlink() or (f.exists() and (not f.is_file() or sha(f)!=want)):
+            raise RuntimeError(f'file changed since transaction, manual review required: {f}')
+    # Even if the unit file is absent, daemon-reload may not yet have happened
+    # after an interrupted rollback. Stop a still-loaded unit before reloading.
+    state=command(['systemctl','show','zero3w-11servo-candidate.service','--property=LoadState','--value'])
+    if state.stdout.strip() not in ('','not-found'):
+        command(['systemctl','stop','zero3w-11servo-candidate.service'])
+    if CANDIDATE_SERVICE.exists():CANDIDATE_SERVICE.unlink()
+    if full15_restored:
+        for f in OWNED:
+            if f.exists():f.unlink()
+    command(['systemctl','daemon-reload'])
+    retained=[str(f) for f in OWNED if f.exists()]
+    result={'candidate_service_removed':True,'official_service_restarted':False,
+            'operator_full15_restored':full15_restored,'holds_retained_until_full15_restored':retained,
+            'transaction_source':str(source),'repeated_call_supported':True}
+    dump(root/f'rollback-{time.time_ns()}.json',result);print(json.dumps(result))
 def fake(root):
     # No board bus or original runtime socket, no default configuration, no audio.
     # --no-policy deliberately separates protocol acceptance from real ONNX tests.
@@ -134,7 +178,7 @@ def main():
     if json.loads((root/'ownership.json').read_text())['run_id']!=a.run_id:raise RuntimeError('wrong directory owner')
     if a.action in ('backup','install','rollback') and not a.power_isolated:raise RuntimeError('motor power must be physically isolated by operator before service mutations')
     if a.action=='backup':
-        dump(root/'before.json',snapshot());backup=root/'backup';backup.mkdir()
+        before=snapshot();dump(root/'before.json',before);backup=root/'backup';backup.mkdir()
         for f in [CONFIG,Path('/etc/robot/updater.toml'),Path('/opt/robot/daemon/current/bin/robotd')]:
             if f.is_file():shutil.copy2(f,backup/f.name)
         # Unit files/drop-ins remain private on the board; log only metadata/hashes.
@@ -143,6 +187,18 @@ def main():
             for f in [Path('/etc/systemd/system')/name,Path('/etc/systemd/system')/(name+'.d')]:
                 if f.is_dir():shutil.copytree(f,unitdir/f.name)
                 elif f.is_file():shutil.copy2(f,unitdir/f.name)
+        # Also preserve vendor fragments/effective drop-ins outside /etc. Hash
+        # every copy, so a "backup" with changing/unreadable files cannot pass.
+        index=[]
+        for unit,entry in before['units'].items():
+            for i,item in enumerate(entry['unit_files']):
+                original=Path(item['path']);dest=unitdir/'effective'/unit/f'{i}-{original.name}'
+                dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(original,dest)
+                if sha(dest)!=item['sha256']:raise RuntimeError('effective unit changed during backup')
+                index.append({**item,'backup_path':str(dest)})
+        for item in before['files']:
+            if item['exists'] and sha(backup/Path(item['path']).name)!=item['sha256']:raise RuntimeError('official file changed during backup')
+        dump(root/'backup-index.json',{'effective_unit_files':index,'official_files':before['files']})
         return
     if a.action=='install':
         if not (root/'before.json').exists():raise RuntimeError('backup required before installation')
@@ -150,6 +206,11 @@ def main():
         for item in before['files']:
             f=Path(item['path'])
             if f.is_file()!=item['exists'] or (f.is_file() and sha(f)!=item['sha256']):raise RuntimeError(f'official file drift since backup: {f}')
+        if not (root/'backup-index.json').is_file():raise RuntimeError('verified backup index required')
+        for unit in before['units'].values():
+            for item in unit['unit_files']:
+                f=Path(item['path'])
+                if not f.is_file() or sha(f)!=item['sha256']:raise RuntimeError(f'effective unit drift since backup: {f}')
         staged=root/'robotd.staged'
         if not a.sha256 or sha(staged)!=a.sha256:raise RuntimeError('candidate hash mismatch')
         helper=root/'prepare_config.py'
@@ -160,34 +221,27 @@ def main():
         # Refuse pre-existing markers and drop-ins before stopping any service.
         for marker in ['ZERO3W_FULL15_RESTORED','ZERO3W_OFFICIAL_UPDATE_REVIEWED','ZERO3W_HARDWARE_APPROVED']:
             if (Path('/etc/robot')/marker).exists():raise RuntimeError('unexpected approval marker')
-        service=Path('/etc/systemd/system/zero3w-11servo-candidate.service')
+        service=CANDIDATE_SERVICE
         for f in [*OWNED,service]:
-            if f.exists():raise RuntimeError(f'owned path already exists: {f}')
+            if f.exists() or f.is_symlink():raise RuntimeError(f'owned path already exists: {f}')
+        body=candidate_body(root)
+        files={str(f):hashlib.sha256(text.encode()).hexdigest() for f,text in {**OWNED,service:body}.items()}
+        # Durable rollback intent precedes the FIRST systemd mutation. Complete
+        # installs and interrupted installs share the same exact ownership map.
+        dump(root/'transaction.json',{'source_commit':a.source_commit,'binary_sha256':a.sha256,
+                                     'owned_systemd_files':files,'hardware_service_started':False})
         for unit in ['robotd.service','updaterd.service']:command(['systemctl','stop',unit])
         for f,text in OWNED.items():exclusive(f,text)
         staged.rename(root/'robotd');(root/'robotd').chmod(0o755)
         dump(root/'morphology.json',{'schema_version':1,'profile':'headless','mouth_present':True,'allow_motion':False,'locked_head_rad':[.3491,.3491,0,0]})
         exclusive(root/'robotd.toml',prepared)
-        body=f'[Unit]\nDescription=Zero3W fixed-head candidate (stopped)\nConditionPathExists=/etc/robot/ZERO3W_HARDWARE_APPROVED\n[Service]\nType=simple\nEnvironment=MICRODUCK_MORPHOLOGY={root}/morphology.json\nEnvironment=DUCK_RUNTIME_DIR=/run/zero3w-candidate\nExecStart={root}/robotd --params {root}/robotd.toml --socket /run/zero3w-candidate.sock\nRestart=no\n'
         exclusive(service,body)
-        files={str(f):sha(f) for f in [*OWNED,service]}
+        for name,want in files.items():
+            if sha(name)!=want:raise RuntimeError('systemd file differs from transaction intent')
         dump(root/'installed.json',{'source_commit':a.source_commit,'binary_sha256':a.sha256,'owned_systemd_files':files,'hardware_service_started':False})
         command(['systemctl','daemon-reload']);command(['systemctl','stop','zero3w-11servo-candidate.service'])
         print(json.dumps({'installed':str(root),'hardware_service':'STOPPED','official_binary':'preserved'}));return
     if a.action=='fake':fake(root);return
     if a.action=='rollback':
-        manifest=json.loads((root/'installed.json').read_text())
-        for name,want in manifest['owned_systemd_files'].items():
-            f=Path(name)
-            if not f.is_file() or sha(f)!=want:raise RuntimeError(f'file changed since install, manual review required: {f}')
-        command(['systemctl','stop','zero3w-11servo-candidate.service'])
-        Path('/etc/systemd/system/zero3w-11servo-candidate.service').unlink()
-        # Keep exact own guards until full15 mechanical restoration. This is a
-        # partial safety rollback, explicitly recorded, not a claim of full undo.
-        if a.full15_restored:
-            for f in OWNED:f.unlink()
-        command(['systemctl','daemon-reload'])
-        retained=[] if a.full15_restored else [str(x) for x in OWNED]
-        dump(root/f'rollback-{time.time_ns()}.json',{'candidate_service_removed':True,'official_service_restarted':False,'operator_full15_restored':a.full15_restored,'holds_retained_until_full15_restored':retained})
-        print(json.dumps({'rollback':'candidate unit removed, official files preserved','holds_retained':retained,'services_restarted':False}))
+        rollback(root,a.full15_restored)
 if __name__=='__main__':main()

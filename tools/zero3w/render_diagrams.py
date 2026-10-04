@@ -29,21 +29,21 @@ GRAPHS={
 [('ready','fault','异常'),('fault','disable','同tick'),('disable','off','OFF请求'),('off','retry','失败'),('retry','off','重试'),('off','queued','全部回读OFF'),('queued','judge','显式请求'),('judge','refused','条件不足'),('refused','queued','仍待人工请求'),('judge','cleared','条件满足'),('cleared','init','人工确认'),('init','ready','门禁再次检查')]),
 'staged-acceptance':('分阶段验收（动力阶段暂缓）',[
 ('software','软件/自审/离线验证\n本轮候选交付',0,0),('review','人的独立review与SSH身份核对\n当前仍有未验证项',1,0),
-('fake','备份 → 独立候选安装 → fake\n所有硬件服务停止',2,0),('supply','供电3.7–6.0V合规实测\n机械/限位/IMU/质量/急停',3,0),
+('fake','备份 → 独立候选安装 → fake\n动力服务停止；保留感知服务',2,0),('supply','供电3.7–6.0V合规实测\n机械/限位/IMU/质量/急停',3,0),
 ('sense','人在场、支撑、通信与感知\n普通/Fast分别验收',4,0),('home','支撑下HOME逐关节验收',5,0),
 ('stand','零速60秒 × 5次\n无跌倒/锁止/滑脚/顶限位',6,0),('walk','0.03m/s、0.10rad/s起步\n各工况5次；标尺/录像测量',7,0),
 ('stop','任一步异常：停止/支撑/切电\n保留失败轨迹',4,1)],
 [('software','review','候选'),('review','fake','review通过/SSH恢复'),('fake','supply','本轮到此，后续另审'),('supply','sense','前置全部验收'),('sense','home','通过'),('home','stand','通过'),('stand','walk','通过'),('sense','stop','异常'),('stand','stop','异常'),('walk','stop','异常')]),
 'deployment-rollback':('迁移与回退流程',[
 ('pre','审计只读预检\n身份/实际路径/模型/Runtime',0,0),('ssh','SSH关闭或身份不明\n停止，保留失败；不猜目标',0,1),
-('backup','独立RUN目录 + 备份\n记录原服务状态/文件哈希',1,0),('install','校验SCP + 安装独立候选\n官方程序不覆盖；安全hold',2,0),
-('fake','隔离fake验收\n候选硬件服务持续STOPPED',3,0),('rollback','只移除本次候选unit\n哈希漂移先停止审查',4,0),
-('missing','仍缺头颈：保留本次安全hold\n明确部分回退，不重启',5,0),('full','全部15机械已恢复且人在场确认\n可移除本次hold，仍不自动启动',5,1)],
-[('pre','ssh','失败'),('pre','backup','核对/供电隔离'),('backup','install','review通过'),('install','fake','退出0'),('fake','rollback','需回退'),('rollback','missing','11设备'),('rollback','full','full15-restored')]),
+('backup','独立RUN目录 + 备份\n记录原服务状态/文件哈希',1,0),('transaction','事前写入事务清单及自有哈希\n随后才停止原动力/更新服务',2,0),('install','校验SCP + 安装独立候选\n官方程序不覆盖；安全hold',3,0),('interrupted','安装中断 / 需回退\n使用事务清单恢复已完成步骤',3,1),
+('fake','隔离fake验收\n候选硬件服务持续STOPPED',4,0),('rollback','重复回退 / 只移除自有unit\n缺失可跳过；哈希漂移停止',5,1),
+('missing','仍缺头颈：保留本次安全hold\n明确部分回退，不重启',6,1),('full','人在场确认全部15关节已恢复\n可移除本次hold，仍不自动启动',6,0)],
+[('pre','ssh','失败'),('pre','backup','核对/供电隔离'),('backup','transaction','review通过/切电确认'),('transaction','install','清单落盘'),('install','interrupted','失败/中断'),('interrupted','rollback','审查自有文件'),('install','fake','退出0'),('fake','rollback','需回退'),('rollback','missing','11设备'),('rollback','full','full15-restored')]),
 'audit-evidence':('每次远端操作的可复用审计',[
 ('intent','操作意义 + 后续注意事项\n目标/精确脚本/产物哈希',0,0),('before','执行前持久保存operation.json\n脚本按内容SHA归档',1,0),
 ('run','审计SSH / SCP\n启用host-key校验，凭证不入日志',2,0),('output','流式保存完整输出\n失败/断线也保留',3,0),
-('after','执行后退出码/UTC/输出SHA\nsuccess 或 failed_or_interrupted',4,0),('index','日志索引 + 文档证据引用\n不把软件试验写成实机通过',5,0)],
+('after','执行后退出码/UTC/输出SHA\nsuccess 或 failed_or_interrupted',4,0),('index','自动追加命令增量文档 + 索引\n意义/用法/结果/证据/注意事项',5,0)],
 [('intent','before','归档'),('before','run','落盘后执行'),('run','output','完整输出'),('output','after','完成或失败'),('after','index','复用/追踪')])}
 
 def render(directory):

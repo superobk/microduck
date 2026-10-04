@@ -4,7 +4,7 @@
 
 本地参考模型接口兼容 **9/9 个模型文件**；固定头颈参考仿真的基础工况通过 **3/9 种**（站立、坐下、起身，每种3个种子、30秒）；实机动作通过 **0 种**。三种计数的分母不同，不能把9个兼容文件说成9种已能执行动作。嘴的独立协议/映射检查通过，嘴部实机开合为未验证，不计入ONNX动作。
 
-板端 SSH 未能进入认证，无法取得实际 walk/stand配置、模型列表/哈希或Runtime。基线默认 walk=`/opt/robot/policies/current/velstand.onnx`，stand未配置；本轮未取得velstand。`alpha_walking.onnx` 明确只是本地参考，不能代替板端模型或静默更改walk路径。
+2026-10-04 新的只读检查确认板端 policy.enabled=true、mode=walk、未覆盖 walk/stand；robot.subscribe 报告 walk=velstand.onnx。实际 `/opt/robot/policies/current` 不存在，已扫描的部署策略/模型目录仅发现 pet_detect.onnx（感知模型）；运动 ONNX 未取得。Runtime 的两份版本及尚未加载状态见[验证报告](validation.zh-CN.md)。基线默认 walk=`/opt/robot/policies/current/velstand.onnx`，stand未配置；本轮未取得velstand。`alpha_walking.onnx` 明确只是本地参考，不能代替板端模型或静默更改walk路径。
 
 ## 文件与命令要求
 
@@ -53,4 +53,4 @@ walking是本轮参考仿真的主策略；坐下/起身调用参考sitstand。�
 
 参考MJCF总质量约0.73724kg，包括原头颈舵机的惯量；拆除电机后的质量、支架/电池位置和重心均未实测。参考模型没有嘴关节/动力学；嘴不能从这组物理试验取得证据。默认地面摩擦0.8，物理执行器为源码中的原型拟合，没有标定实际供电轨。source commit、MJCF和全部mesh哈希见 [来源](evidence/reference-summary.json)。重用本地资源只读，没有将来历不明的mesh复制进候选固件。
 
-后续只读SSH恢复后，先归档实际策略配置、每个ONNX哈希、C API返回的Runtime版本；对实际文件重跑契约、fake和仿真。遇到新的LSTM导出先验证hidden/cell契约（Rust已有专用8项回归），本Python参考工具只接受单输入/单输出61/14，不会把不支持的结构假装通过。
+后续在审查明确运动模型来源后，先归档实际策略文件来源与每个ONNX哈希，确认运行进程实际加载的Runtime；对实际文件重跑契约、fake和仿真。遇到新的LSTM导出先验证hidden/cell契约（Rust已有专用8项回归），本Python参考工具只接受单输入/单输出61/14，不会把不支持的结构假装通过。

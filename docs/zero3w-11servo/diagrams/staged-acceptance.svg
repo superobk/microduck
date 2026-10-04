@@ -30,7 +30,7 @@
 <text x="300" y="239" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">当前仍有未验证项</text>
 <rect x="85" y="315" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
 <text x="300" y="345" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">备份 → 独立候选安装 → fake</text>
-<text x="300" y="369" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">所有硬件服务停止</text>
+<text x="300" y="369" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">动力服务停止；保留感知服务</text>
 <rect x="85" y="445" width="430" height="78" rx="12" fill="#e8f3fc" stroke="#5681a0"/>
 <text x="300" y="475" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">供电3.7–6.0V合规实测</text>
 <text x="300" y="499" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#18354b">机械/限位/IMU/质量/急停</text>

@@ -12,6 +12,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -20,6 +21,23 @@ import uuid
 
 def now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def summarize(directory: Path, record: dict):
+    """Append a human-readable command entry after completion, including failures.
+
+    A run can link COMMANDS_INCREMENTAL.md to the private workspace-wide ledger.
+    Exact argv remains in operation.json: embedded SSH scripts can exceed 30 KB
+    and must not make the readable command guide unusable. Never lose that argv.
+    """
+    shown = [a if len(a) <= 500 else '<long argument: see operation.json>' for a in record['argv']]
+    with (directory.parent / 'COMMANDS_INCREMENTAL.md').open('a') as out:
+        out.write(f"\n## {record['finished_utc']} · {directory.name}\n\n")
+        out.write(f"{record['meaning']}\n\n```bash\n{shlex.join(shown)}\n```\n\n")
+        out.write(f"退出码：`{record['exit_code']}`；状态：`{record['status']}`。\n\n")
+        out.write(f"后续注意：{record['next_attention']}\n\n")
+        out.write(f"[精确命令与元数据]({directory / 'operation.json'}) · [完整输出]({directory / 'output.log'})\n")
+        out.write(f"\n输出 SHA256：`{record.get('output_sha256', 'unavailable')}`。\n")
 
 
 def run(argv, root: Path, meaning: str, note: str, cwd: str | None = None):
@@ -58,6 +76,7 @@ def run(argv, root: Path, meaning: str, note: str, cwd: str | None = None):
         output = directory / 'output.log'
         if output.exists(): record['output_sha256'] = hashlib.sha256(output.read_bytes()).hexdigest()
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + '\n')
+        summarize(directory, record)
     return code
 
 
