@@ -24,9 +24,36 @@ import runtime
 from runtime import Engine
 from server import dispatch,request_local,LocalServer,HelperHandler,ThreadingHTTPServer,Handler,EventFrames
 from install import check_archive,verify_release
+from imu_quality import rotation_consistency
 
 # Loopback contract tests must bypass workstation network proxy discovery.
 urlopen=build_opener(ProxyHandler({})).open
+
+class ImuQualityTests(unittest.TestCase):
+    def samples(self, rate, gyro):
+        return [(8+i*.05, {'sensor_quat':[math.cos(math.radians(rate*i*.05)/2),0,0,
+                                        math.sin(math.radians(rate*i*.05)/2)],
+                              'gyro_sensor':[0,0,math.radians(gyro)]}) for i in range(41)]
+
+    def test_fused_spin_with_quiet_gyro_is_not_freshness_pass(self):
+        rows=self.samples(7,.08)
+        result=rotation_consistency(rows,10)
+        self.assertEqual(result['status'],'不一致')
+        self.assertAlmostEqual(result['rotation_deg_s'],7,places=8)
+        self.assertEqual(rows[-1][1]['gyro_sensor'],[0,0,math.radians(.08)])
+
+    def test_real_turn_and_quaternion_sign_are_not_anomaly(self):
+        rows=self.samples(7,7)
+        self.assertEqual(rotation_consistency(rows,10)['status'],'未见明显不一致')
+        rows=self.samples(0,0);rows[-1][1]['sensor_quat']=[-1,0,0,0]
+        self.assertEqual(rotation_consistency(rows,10)['rotation_deg'],0)
+
+    def test_insufficient_stale_and_nonfinite_do_not_pass(self):
+        rows=self.samples(7,.08)
+        for data,now in [(rows[:3],10),(rows,13)]:
+            self.assertEqual(rotation_consistency(data,now)['status'],'未验证')
+        rows[-1][1]['gyro_sensor']=[float('nan'),0,0]
+        self.assertEqual(rotation_consistency(rows,10)['status'],'未验证')
 
 class ProtocolTests(unittest.TestCase):
     def test_crc_and_stuffing(self):
@@ -135,6 +162,18 @@ class EngineTests(unittest.TestCase):
 
     def test_calibration_rejects_stale(self):
         with self.assertRaises(RuntimeError):self.engine.calibrate('a'*32,{'mode':'yaw'})
+        self.assertFalse((self.engine.root/'profile.json').exists())
+
+    def test_anomalous_fusion_cannot_be_hidden_by_calibration(self):
+        now=time.monotonic();rows=ImuQualityTests().samples(7,.08)
+        for t,r in rows:
+            self.engine.update('imu',{**r,'trunk_quat':r['sensor_quat'],'gyro':r['gyro_sensor']},now+t-10)
+        # Raw reply is fresh, but calibration is refused without saving a
+        # misleading reference. The operator can still inspect all raw values.
+        self.assertEqual(self.engine.snapshot()['imu']['status'],'实时')
+        for mode in ['yaw','reference','bias']:
+            with self.assertRaisesRegex(RuntimeError,'融合姿态与角速度不一致'):
+                self.engine.calibrate('d'*32,{'mode':mode})
         self.assertFalse((self.engine.root/'profile.json').exists())
 
     def test_calibration_20hz_accepts_recent_samples_without_weakening_50hz(self):
@@ -377,6 +416,20 @@ class EventFrameTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'helper down'):frames.get()
 
 class AcceptanceTests(unittest.TestCase):
+    def test_good_communication_does_not_certify_anomalous_attitude(self):
+        from acceptance import evaluate
+        state={k:{'errors':0} for k in ['servo','imu','tof']}
+        state.update(uptime_s=60,record_drops=0)
+        state['servo']['devices']={str(i):{'connected':True} for i in p.SERVO_IDS}
+        rows=[{'elapsed_s':i,'servo_hz':50,'imu_hz':50,'p99_ms':7,'rss_kib':100,
+               **{k+'_status':'实时' for k in ['servo','imu','tof','camera']},
+               'imu_rotation_consistency':'不一致','imu_rotation_deg_s':7,'imu_gyro_peak_deg_s':.08} for i in range(60)]
+        result=evaluate(rows,{**state,'uptime_s':0},state,60)
+        self.assertTrue(result['ordinary_bus_pass'])
+        self.assertEqual(result['imu_fusion_consistency']['status'],'不一致')
+        for r in rows:del r['imu_rotation_consistency']
+        self.assertEqual(evaluate(rows,{**state,'uptime_s':0},state,60)['imu_fusion_consistency']['status'],'未验证')
+
     def test_version_reboot_and_helper_restart_do_not_form_continuous_pass(self):
         from acceptance import continuity
         first={'boot':'old','version':{'version':'r7'},'uptime_s':100}

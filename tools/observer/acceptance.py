@@ -20,6 +20,7 @@ from runtime import atomic_json,utc
 def brief(state):
     return {k:state.get(k) for k in ['version','uptime_s','bus_state','bus_requested','bus_target_hz','diagnostic_exempt_ids','bus_p99_ms','queue_sizes','record_drops','recording','record_bytes','audio','kernel_uart']} | {
         'components':{k:{x:state[k].get(x) for x in ['status','hz','age_ms','errors','error']} for k in ['servo','imu','tof','camera']},
+        'imu_rotation_consistency':state['imu'].get('rotation_consistency',{'status':'未验证'}),
         'devices':state['servo']['devices'],
         'services':{k:{x:r.get(x) for x in ['ActiveState','MainPID']} for k,r in state['services'].items()}}
 
@@ -36,7 +37,7 @@ def run(duration=1800,label='first-30min',sock='/run/duck-observer/helper.sock')
     root=DATA/'acceptance'/label;root.mkdir(parents=True,exist_ok=False)
     before=snapshot();atomic_json(root/'before.json',before)
     start=time.monotonic();rows=[];initial=None;first_done=False;tick=0;interruption=None
-    columns=['utc','elapsed_s','version','uptime_s','servo_hz','imu_hz','tof_hz','camera_fps','p99_ms','servo_errors','imu_errors','tof_errors','rss_kib','cpu_percent','disk_free','record_drops','action_queue','record_queue','servo_status','imu_status','tof_status','camera_status']
+    columns=['utc','elapsed_s','version','uptime_s','servo_hz','imu_hz','tof_hz','camera_fps','p99_ms','servo_errors','imu_errors','tof_errors','rss_kib','cpu_percent','disk_free','record_drops','action_queue','record_queue','servo_status','imu_status','tof_status','camera_status','imu_rotation_consistency','imu_rotation_deg_s','imu_gyro_peak_deg_s']
     with (root/'samples.csv').open('w') as f:
         writer=csv.DictWriter(f,fieldnames=columns);writer.writeheader()
         while time.monotonic()-start<=duration:
@@ -50,7 +51,10 @@ def run(duration=1800,label='first-30min',sock='/run/duck-observer/helper.sock')
                     'rss_kib':int(resources.get('VmRSS','0 kB').split()[0]),'cpu_percent':resources.get('cpu_percent'),
                     'disk_free':resources.get('disk_free'),'record_drops':state['record_drops'],
                     'action_queue':state['queue_sizes']['action'],'record_queue':state['queue_sizes']['record'],
-                    **{k+'_status':state[k]['status'] for k in ['servo','imu','tof','camera']}}
+                    **{k+'_status':state[k]['status'] for k in ['servo','imu','tof','camera']},
+                    'imu_rotation_consistency':state['imu'].get('rotation_consistency',{}).get('status','未验证'),
+                    'imu_rotation_deg_s':state['imu'].get('rotation_consistency',{}).get('rotation_deg_s'),
+                    'imu_gyro_peak_deg_s':state['imu'].get('rotation_consistency',{}).get('gyro_peak_deg_s')}
                 writer.writerow(row);f.flush();rows.append(row)
                 interruption=continuity(initial,state)
                 if interruption:break
@@ -82,6 +86,11 @@ def evaluate(rows,initial,final,duration):
     exempt=final.get('diagnostic_exempt_ids',[])
     required=11-len(exempt); target=final.get('bus_target_hz',50)
     diagnostic_pass=bool(connected==required and hz and hz>=target*.9 and p99 is not None and p99<20 and not stale['servo'] and not stale['imu'] and not deltas['servo'] and not deltas['imu'])
+    # Bus communication can pass while raw fusion spins incorrectly. Retain the
+    # transport result and report attitude separately; no absent field is a pass.
+    anomalies=sum(r.get('imu_rotation_consistency')=='不一致' for r in usable)
+    quality_known=bool(usable) and all(r.get('imu_rotation_consistency')=='未见明显不一致' for r in usable)
+    fusion_status='不一致' if anomalies or final['imu'].get('rotation_consistency',{}).get('status')=='不一致' else '未见明显不一致' if quality_known else '未验证'
     return {'window_s':duration,'samples':len(rows),'sample_span_s':rows[-1]['elapsed_s']-rows[0]['elapsed_s'] if rows else 0,
         'average_servo_hz':hz,'average_imu_hz':mean('imu_hz'),'average_tof_hz':mean('tof_hz'),'average_camera_capture_fps':mean('camera_fps'),
         'max_rolling_bus_p99_ms':p99,'error_delta':deltas,'non_live_samples_after_warmup':stale,
@@ -91,8 +100,9 @@ def evaluate(rows,initial,final,duration):
         'same_helper_process':final['uptime_s']>=initial['uptime_s']+max(0,duration-3),
         'connected_servos':connected,'imu_only_pass':bool(mean('imu_hz') and mean('imu_hz')>=45 and p99 is not None and p99<20 and not stale['imu'] and not deltas['imu']),
         'required_servos':required,'diagnostic_exempt_ids':exempt,'bus_target_hz':target,'diagnostic_bus_pass':diagnostic_pass,
+        'imu_fusion_consistency':{'status':fusion_status,'anomaly_samples_after_warmup':anomalies,'max_rotation_deg_s':maximum('imu_rotation_deg_s'),'max_gyro_peak_deg_s':maximum('imu_gyro_peak_deg_s')},
         'ordinary_bus_pass':bool(not exempt and connected==11 and hz and hz>=45 and p99 is not None and p99<20 and not stale['servo'] and not stale['imu'] and not deltas['servo'] and not deltas['imu']),
-        'limits':'ID14默认OK仅为用户诊断豁免，不能计实测连接；20Hz诊断不计50Hz全链通过；采集统计与浏览器实际解码分别验收；RSS为趋势证据；结束窗口不停止采集'}
+        'limits':'IMU/bus pass只指通信门槛，不证明融合姿态精度；短窗未见不一致也不是绝对精度验收。ID14默认OK仅为用户诊断豁免，不能计实测连接；20Hz诊断不计50Hz全链通过；采集统计与浏览器实际解码分别验收；RSS为趋势证据；结束窗口不停止采集'}
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--duration',type=int,default=1800);p.add_argument('--label',default='first-30min');a=p.parse_args();run(a.duration,a.label)

@@ -30,6 +30,7 @@ import zipfile
 
 from protocol import (BUS_IDS, SERVO_IDS, SLOTS, MOUNT, ReadOnlyPort, imu_decode,
                       servo_decode, qnorm, qmul, qinv, rotate, euler)
+from imu_quality import rotation_consistency
 
 def kernel_uart(port):
     """Read driver counters without another UART open or driver reconfiguration.
@@ -260,6 +261,9 @@ class Engine:
                 device=out['servo']['devices'].setdefault(str(ident),{'id':ident,'slot':SLOTS[ident],'status':'未验证'})
                 device.update(check_status='默认OK（用户暂时豁免）',exempt=True)
             imu = out['imu']
+            # Fresh UART replies do not certify SFLP attitude quality. This
+            # bounded diagnostic uses raw signals, never the saved display bias.
+            imu['rotation_consistency'] = rotation_consistency(self.samples, now)
             if 'trunk_quat' in imu:
                 # Service quaternions are already in trunk axes. Do not apply +90Y twice.
                 sensor = imu.get('sensor_quat')
@@ -773,6 +777,8 @@ class Engine:
             profile.update(mount=qnorm(mount),reference=[1.,0.,0.,0.],bias=[0.,0.,0.])
         else:
             imu=self.snapshot()['imu']
+            if imu['rotation_consistency']['status']=='不一致':
+                raise RuntimeError('融合姿态与角速度不一致；先排查IMU，归零或显示偏置不能修复融合')
             # At the default 20Hz, a fixed 25 samples/second gate can never
             # succeed. Require 15 recent samples for diagnostics; retain the
             # original 25 at 50Hz, the 1s freshness and all movement guards.
