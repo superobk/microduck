@@ -115,6 +115,12 @@ def switch_release(verb,version=None,previous=False):
         target=BASE/'releases'/version
     if not target.is_relative_to(BASE/'releases'): raise RuntimeError('版本链接越界')
     manifest=verify_release(target)
+    if target.resolve()==old:
+        # Repeating activation must not replace previous with current and lose
+        # the rollback pointer, or interrupt an already running observation.
+        prior=(BASE/'previous').resolve().name if (BASE/'previous').is_symlink() else None
+        log('release_unchanged',version=manifest['version'],previous=prior)
+        return {'version':manifest['version'],'previous':prior,'controller_changes':False,'already_active':True}
     tx={'old':str(old),'target':str(target),'verb':verb,'before':before}
     log('release_started',**tx)
     run(['systemctl','stop','duck-observer.service','duck-observer-helper.service'])

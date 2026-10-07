@@ -338,6 +338,16 @@ class AcceptanceTests(unittest.TestCase):
             self.assertIsNotNone(continuity(first,{**first,**change}))
 
 class ArchiveTests(unittest.TestCase):
+    def test_repeated_activation_preserves_previous_without_service_restart(self):
+        import install
+        with tempfile.TemporaryDirectory() as directory:
+            base=Path(directory);new=base/'releases/new';old=base/'releases/old'
+            new.mkdir(parents=True);old.mkdir();(base/'current').symlink_to(new);(base/'previous').symlink_to(old)
+            with patch.object(install,'BASE',base),patch.object(install.os,'geteuid',return_value=0),patch.object(install,'ensure_owned_units'),patch.object(install,'snapshot',return_value={}),patch.object(install,'verify_release',return_value={'version':'new'}),patch.object(install,'log'),patch.object(install,'run') as command:
+                result=install.switch_release('activate','new')
+            self.assertTrue(result['already_active']);self.assertEqual(result['previous'],'old')
+            self.assertEqual((base/'previous').resolve(),old.resolve());command.assert_not_called()
+
     def test_traversal_and_links_rejected(self):
         for kind in ['traversal','symlink']:
             with tempfile.TemporaryDirectory() as directory:
