@@ -31,6 +31,24 @@ import zipfile
 from protocol import (BUS_IDS, SERVO_IDS, SLOTS, MOUNT, ReadOnlyPort, imu_decode,
                       servo_decode, qnorm, qmul, qinv, rotate, euler)
 
+def kernel_uart(port):
+    """Read driver counters without another UART open or driver reconfiguration.
+
+    Counts are cumulative within this boot. Omitted fields remain unavailable,
+    not measured zero. CRC rejects still apply even if a driver counter is zero.
+    """
+    name=Path(port).name;path=Path('/proc/tty/driver/serial')
+    if not name.startswith('ttyS') or not name[4:].isdigit() or not path.exists():return {'available':False}
+    try:
+        line=next((s for s in path.read_text().splitlines() if s.startswith(name[4:]+':')),None)
+        if not line:return {'available':False}
+        counters={}
+        for item in line.split():
+            key,_,value=item.partition(':')
+            if key in {'tx','rx','fe','oe','pe','brk','bo'} and value.isdigit():counters[key]=int(value)
+        return {'available':True,'port':name,'raw_line':line,'counts':counters}
+    except OSError as exc:return {'available':False,'error':str(exc)}
+
 CONTROLLERS = ['robotd', 'zero3w-11servo-candidate']
 WATCH_UNITS = CONTROLLERS + ['updaterd', 'tofd', 'mediad']
 ALLOWED_UNITS = {'tofd', 'mediad'}
@@ -252,6 +270,15 @@ class Engine:
             return fresh and all(units.get(n, {}).get('query_ok') and
                 units[n].get('ActiveState') in ('inactive', 'failed') and units[n].get('MainPID') == '0' for n in CONTROLLERS)
 
+    def controller_running(self):
+        # Unknown/stale service state is not evidence of a running controller.
+        # Wait for maintenance rather than counting missing sockets as IMU faults.
+        with self.lock:
+            units=self.state['services']
+            return time.monotonic()-self.state['service_checked_at']<2 and any(
+                units.get(n,{}).get('query_ok') and units[n].get('ActiveState')=='active'
+                and units[n].get('MainPID','0')!='0' for n in CONTROLLERS)
+
     def controller_socket(self):
         with self.lock:
             units = self.state['services']
@@ -271,11 +298,13 @@ class Engine:
                     age = max(0., time.time()-camera.stat().st_mtime)
                     self.update('camera', {'stats': data, 'evidence': '采集统计，图像接收由浏览器单独验证'}, time.monotonic()-age)
                 self.inspect_audio()
+                counters=kernel_uart(self.port_path)
+                with self.lock:self.state['kernel_uart']=counters
                 snap = self.snapshot()
                 metrics = {'utc': utc(), 'uptime_s': snap['uptime_s'], 'bus_p99_ms': snap['bus_p99_ms'],
                     'rates': {k: snap[k]['hz'] for k in ['servo','imu','tof','camera']},
                     'errors': {k: snap[k]['errors'] for k in ['servo','imu','tof','camera']},
-                    'resources': self.resources()}
+                    'resources': self.resources(),'kernel_uart':self.state.get('kernel_uart')}
                 self.summary.append(metrics)
                 with (self.root/'summary.jsonl').open('a') as f:
                     f.write(json.dumps(metrics, ensure_ascii=False)+'\n')
@@ -344,12 +373,13 @@ class Engine:
         self.record_bytes += max(0, self.record_path.stat().st_size-before)
 
     def bus_loop(self):
-        port = None; failures = 0; slow_index = 0; last_slow = 0.; target = time.monotonic()
+        port = None; verified=False; failures = 0; slow_index = 0; last_slow = 0.; target = time.monotonic()
         while not self.shutdown.is_set():
             try:
                 wanted = self.observing and self.bus_requested and not self.offline and self.controllers_stopped()
                 if self.bus_rescan.is_set():
                     if port:port.close();port=None
+                    failures=0  # explicit observe-on begins a new verified attempt
                     self.bus_rescan.clear()
                 if not wanted:
                     if port: port.close(); port = None
@@ -361,6 +391,7 @@ class Engine:
                     if port:port.close();port=None
                     self.state['bus_state']='等待新鲜UART所有权检查';self.shutdown.wait(.02);continue
                 if port is None:
+                    verified=False
                     port = ReadOnlyPort(self.port_path)
                     metadata = {};bus_ids=[]
                     for ident in BUS_IDS:
@@ -387,7 +418,8 @@ class Engine:
                     with self.lock: self.state['servo']['devices'] = metadata
                     self.journal('bus_acquired', {'port':self.port_path, 'ids':bus_ids,'missing':[i for i in BUS_IDS if i not in bus_ids], 'writes':False})
                     connected_servos=[i for i in bus_ids if i in SERVO_IDS]
-                    target = time.monotonic(); failures = 0
+                    verified=True
+                    target = time.monotonic()
                 if not self.controllers_stopped(): raise RuntimeError('控制器状态变化，释放UART')
                 begin = time.monotonic(); rows = port.sync(ids=bus_ids); received = time.monotonic()
                 devices = {}; imu = None
@@ -415,11 +447,16 @@ class Engine:
                 else: target = time.monotonic()
             except Exception as exc:
                 self.error('servo', exc); self.error('imu', exc); failures += 1
-                if port: port.close(); port = None
-                # No retry may secretly reacquire after ownership/identity/torque failure.
-                if not isinstance(exc, (TimeoutError, ValueError)) or failures >= 3:
+                recoverable=verified and port is not None and isinstance(exc,(TimeoutError,ValueError)) and failures<3
+                # A bad frame is discarded, never corrected into telemetry. Keep
+                # the verified exclusive port for a bounded retry, so isolated
+                # CRC errors do not cause an identity scan + 0.5s outage. Do not
+                # reset the failure streak at open: only a valid sync resets it.
+                # Ownership/identity/torque errors still close and require rearm.
+                if not recoverable:
+                    if port:port.close();port=None
                     self.bus_requested = False; self.state['bus_state'] = '需手动重新开启'
-                self.shutdown.wait(.5)
+                self.shutdown.wait(.02 if recoverable else .5)
         if port: port.close()
 
     def stream(self, path, method, component):
@@ -431,7 +468,7 @@ class Engine:
             for ident, call, args in calls:
                 f.write((json.dumps({'jsonrpc':'2.0','id':ident,'method':call,'params':args})+'\n').encode()); f.flush()
             while not self.shutdown.is_set() and self.observing:
-                if component == 'imu' and self.controllers_stopped(): return
+                if component == 'imu' and not self.controller_running(): return
                 line = f.readline(262145)
                 if not line or len(line)>262144: raise RuntimeError('数据流断开/过长')
                 obj = json.loads(line)
@@ -473,7 +510,7 @@ class Engine:
 
     def robot_loop(self):
         while not self.shutdown.is_set():
-            if self.offline or not self.observing or self.controllers_stopped(): self.shutdown.wait(.5); continue
+            if self.offline or not self.observing or not self.controller_running(): self.shutdown.wait(.5); continue
             try: self.stream(self.controller_socket(), 'robot.subscribe', 'imu')
             except Exception as exc: self.error('imu', exc); self.shutdown.wait(2)
 

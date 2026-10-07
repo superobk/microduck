@@ -237,6 +237,32 @@ class EngineTests(unittest.TestCase):
         self.engine.owner_pids=[123];self.assertFalse(self.engine.ownership_ready())
         self.engine.owner_pids=[];self.engine.owner_checked=time.monotonic()-1;self.assertFalse(self.engine.ownership_ready())
 
+    def test_three_bad_frames_latch_without_reopening_or_resetting_streak(self):
+        from unittest.mock import Mock
+        port=Mock()
+        port.identity.side_effect=lambda ident:((1030 if ident==200 else 1200).to_bytes(2,'little')+bytes([3 if ident==200 else 52]),0)
+        port.read.return_value=(bytes(7),0)
+        port.sync.side_effect=TimeoutError('missing response')
+        self.engine.offline=False;self.engine.observing=True;self.engine.bus_requested=True
+        with patch('runtime.ReadOnlyPort',return_value=port) as opener,patch.object(self.engine,'controllers_stopped',return_value=True),patch.object(self.engine,'ownership_ready',return_value=True):
+            thread=threading.Thread(target=self.engine.bus_loop);thread.start()
+            deadline=time.monotonic()+2
+            while self.engine.bus_requested and time.monotonic()<deadline:time.sleep(.01)
+            self.engine.shutdown.set();thread.join(2)
+        self.assertFalse(self.engine.bus_requested);self.assertEqual(port.sync.call_count,3)
+        self.assertEqual(opener.call_count,1);port.close.assert_called_once()
+        self.assertEqual(self.engine.state['servo']['errors'],3)
+
+    def test_unknown_stale_or_inactive_controller_is_not_running(self):
+        self.assertFalse(self.engine.controller_running())
+        self.engine.state['service_checked_at']=time.monotonic()
+        self.engine.state['services']={'robotd':{'query_ok':True,'ActiveState':'inactive','MainPID':'0'}}
+        self.assertFalse(self.engine.controller_running())
+        self.engine.state['services']['robotd'].update(ActiveState='active',MainPID='123')
+        self.assertTrue(self.engine.controller_running())
+        self.engine.state['service_checked_at']=time.monotonic()-3
+        self.assertFalse(self.engine.controller_running())
+
 class HTTPTests(unittest.TestCase):
     def setUp(self):
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler)

@@ -18,7 +18,7 @@ from install import DATA,snapshot
 from runtime import atomic_json,utc
 
 def brief(state):
-    return {k:state.get(k) for k in ['version','uptime_s','bus_state','bus_requested','bus_p99_ms','queue_sizes','record_drops','recording','record_bytes','audio']} | {
+    return {k:state.get(k) for k in ['version','uptime_s','bus_state','bus_requested','bus_p99_ms','queue_sizes','record_drops','recording','record_bytes','audio','kernel_uart']} | {
         'components':{k:{x:state[k].get(x) for x in ['status','hz','age_ms','errors','error']} for k in ['servo','imu','tof','camera']},
         'devices':state['servo']['devices'],
         'services':{k:{x:r.get(x) for x in ['ActiveState','MainPID']} for k,r in state['services'].items()}}
@@ -56,12 +56,13 @@ def run(duration=1800,label='first-30min',sock='/run/duck-observer/helper.sock')
                 if interruption:break
             except Exception as exc:
                 with (root/'errors.jsonl').open('a') as err:err.write(json.dumps({'utc':utc(),'error':str(exc)})+'\n')
-            if elapsed>=60 and not first_done:
+            if elapsed>=60 and not first_done and rows:
                 atomic_json(root/'first60.json',evaluate(rows,initial,state,60));first_done=True
             if int(elapsed)%60==0:print(json.dumps({'elapsed_s':round(elapsed),'samples':len(rows),'latest':rows[-1] if rows else None},ensure_ascii=False),flush=True)
             tick+=1;time.sleep(max(.01,start+tick-time.monotonic()))
+    if initial is None:raise RuntimeError('验收期间未取得任何有效状态；查看errors.jsonl，不生成通过结论')
     final=request_local(sock,'status');after=snapshot();atomic_json(root/'after.json',after)
-    result=evaluate(rows,initial,final,duration);result.update(protected_unchanged=before==after,ended_utc=utc(),observer_continues=final['observing'],evidence=str(root))
+    result=evaluate(rows,initial,final,duration);result.update(protected_unchanged=before==after,ended_utc=utc(),observer_continues=final['observing'],evidence=str(root),kernel_uart_initial=initial.get('kernel_uart'),kernel_uart_final=final.get('kernel_uart'))
     interruption=interruption or continuity(initial,final)
     if interruption:result.update(interruption=interruption,ordinary_bus_pass=False,imu_only_pass=False,same_helper_process=False)
     atomic_json(root/'final.json',result);atomic_json(root/'last.json',brief(final))
