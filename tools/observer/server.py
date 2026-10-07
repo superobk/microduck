@@ -77,6 +77,27 @@ class HelperHandler(socketserver.StreamRequestHandler):
 class LocalServer(socketserver.ThreadingUnixStreamServer):
     daemon_threads=True
 
+class EventFrames:
+    """Share one 10Hz status frame across pages, independently of 50Hz UART IO.
+
+    The Zero3W has limited CPU: per-page deep copies, latency sorting and JSON
+    encoding otherwise compete with IMU reads. Never replace sample timestamps
+    with this cache time; browsers still age the original hardware samples.
+    Errors are propagated, so a cached frame cannot conceal a helper outage.
+    """
+    def __init__(self, provider, interval=.1):
+        self.provider=provider; self.interval=interval
+        self.lock=threading.Lock(); self.stamp=0.; self.payload=None
+
+    def get(self):
+        with self.lock:
+            now=time.monotonic()
+            if self.payload is None or now-self.stamp>=self.interval:
+                row=self.provider()
+                payload=('data: '+json.dumps(row,ensure_ascii=False,allow_nan=False)+'\n\n').encode()
+                self.payload=payload; self.stamp=time.monotonic()
+            return self.payload
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version='HTTP/1.1'
     def log_message(self, *_): pass  # maintenance is audited at the helper; no raw credentials
@@ -105,8 +126,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200); self.send_header('Content-Type','text/event-stream')
                 self.send_header('Cache-Control','no-store'); self.send_header('Connection','close'); self.end_headers()
                 while True:
-                    row=self.call('status')
-                    self.wfile.write(('data: '+json.dumps(row,ensure_ascii=False,allow_nan=False)+'\n\n').encode()); self.wfile.flush(); time.sleep(.05)
+                    self.wfile.write(self.server.event_frames.get())
+                    self.wfile.flush(); time.sleep(.1)
             if path=='/api/frame':
                 # Fixed local URL reuses mediad's rotated PNG; no new V4L2 owner.
                 with urlopen('http://127.0.0.1:8080/frame',timeout=4) as r:
@@ -130,7 +151,11 @@ class Handler(BaseHTTPRequestHandler):
             kind='text/javascript' if p.suffix=='.mjs' else mimetypes.guess_type(str(p))[0] or 'application/octet-stream'
             self.reply(200,p.read_bytes(),kind)
         except (BrokenPipeError,ConnectionResetError): return
-        except Exception as exc: self.reply(503,{'error':str(exc)})
+        except Exception as exc:
+            # SSE headers are already sent. Close this stream so EventSource
+            # retries; writing a second HTTP response would corrupt its framing.
+            if path=='/api/events': self.close_connection=True; return
+            self.reply(503,{'error':str(exc)})
 
     def do_POST(self):
         try:
@@ -163,6 +188,7 @@ def main():
     else:
         server=ThreadingHTTPServer((a.host,a.port),Handler); server.daemon_threads=True
         server.helper_socket=a.socket; server.data_dir=Path(a.data_dir); engine=None
+        server.event_frames=EventFrames(lambda:request_local(a.socket,'status'))
     def stop(*_): threading.Thread(target=server.shutdown,daemon=True).start()
     signal.signal(signal.SIGTERM,stop); signal.signal(signal.SIGINT,stop)
     try: server.serve_forever(poll_interval=.2)

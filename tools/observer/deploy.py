@@ -24,6 +24,11 @@ from audit_command import run
 
 def package(version,destination):
     if not re.fullmatch(r'[A-Za-z0-9._-]{1,80}',version): raise ValueError('版本名称错误')
+    # A commit label must describe the bytes actually shipped. Reject local
+    # modifications and preserve an earlier artifact rather than relabel it.
+    dirty=subprocess.check_output(['git','status','--porcelain','--untracked-files=all','--','tools/observer'],cwd=HERE.parents[1],text=True)
+    if dirty.strip():raise RuntimeError('门户源码未提交；先审查并提交再生成发布包')
+    if destination.exists():raise RuntimeError('候选包已存在；保留证据并使用新的版本名称')
     revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=HERE,text=True).strip()
     with tempfile.TemporaryDirectory() as directory:
         stage=Path(directory)

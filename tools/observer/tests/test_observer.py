@@ -22,7 +22,7 @@ HERE=Path(__file__).resolve().parents[1];sys.path.insert(0,str(HERE))
 import protocol as p
 import runtime
 from runtime import Engine
-from server import dispatch,request_local,LocalServer,HelperHandler,ThreadingHTTPServer,Handler
+from server import dispatch,request_local,LocalServer,HelperHandler,ThreadingHTTPServer,Handler,EventFrames
 from install import check_archive,verify_release
 
 # Loopback contract tests must bypass workstation network proxy discovery.
@@ -252,6 +252,29 @@ class HTTPTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as raised:urlopen(self.url+path,timeout=3)
             self.assertEqual(raised.exception.code,404)
             raised.exception.close()
+
+class EventFrameTests(unittest.TestCase):
+    def test_multiple_pages_share_sample_without_refreshing_its_age(self):
+        calls=[]
+        def provider():
+            calls.append(1);time.sleep(.01)
+            return {'imu':{'received':123.,'age_ms':7.},'version':{'version':'test'}}
+        frames=EventFrames(provider,interval=.1)
+        results=[]
+        threads=[threading.Thread(target=lambda:results.append(frames.get())) for _ in range(12)]
+        for thread in threads:thread.start()
+        for thread in threads:thread.join()
+        self.assertEqual(len(calls),1);self.assertEqual(len(set(results)),1)
+        row=json.loads(results[0].decode().removeprefix('data: '))
+        self.assertEqual(row['imu']['received'],123.)
+        self.assertEqual(row['imu']['age_ms'],7.)
+        time.sleep(.11);frames.get();self.assertEqual(len(calls),2)
+
+    def test_helper_outage_does_not_reuse_expired_frame(self):
+        from unittest.mock import Mock
+        provider=Mock(side_effect=[{'imu':{'status':'实时'}},RuntimeError('helper down')])
+        frames=EventFrames(provider,interval=.01);frames.get();time.sleep(.02)
+        with self.assertRaisesRegex(RuntimeError,'helper down'):frames.get()
 
 class ArchiveTests(unittest.TestCase):
     def test_traversal_and_links_rejected(self):
