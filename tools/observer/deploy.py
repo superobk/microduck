@@ -53,8 +53,22 @@ def main():
     if extra and a.action!='cli':p.error('不允许额外参数')
     archive=a.audit_root.parent/'artifacts';archive.mkdir(exist_ok=True)
     if a.action in ['package','install']:
-        bundle=archive/(a.version+'.tar.gz');meta=package(a.version,bundle)
-        (archive/(a.version+'.json')).write_text(json.dumps(meta,indent=2)+'\n');print(json.dumps(meta))
+        if not re.fullmatch(r'[A-Za-z0-9._-]{1,80}',a.version):p.error('版本名称错误')
+        bundle=archive/(a.version+'.tar.gz');manifest=archive/(a.version+'.json')
+        if a.action=='install' and bundle.exists():
+            # Review/package may happen while the board is off. Install those
+            # exact bytes later; never rebuild an already-reviewed version.
+            meta=json.loads(manifest.read_text())
+            if meta.get('version')!=a.version or meta.get('sha256')!=hashlib.sha256(bundle.read_bytes()).hexdigest():
+                raise RuntimeError('既有候选包身份/哈希不符；停止安装并保留证据')
+            with tarfile.open(bundle,'r:gz') as tar:
+                identity=json.load(tar.extractfile('VERSION.json'))
+            if identity.get('revision')!=meta.get('revision') or identity.get('version')!=a.version:
+                raise RuntimeError('候选包源码身份不符')
+        else:
+            meta=package(a.version,bundle)
+            manifest.write_text(json.dumps(meta,indent=2)+'\n')
+        print(json.dumps(meta))
         if a.action=='package': return
     if not a.target or a.target.startswith('-') or any(c.isspace() for c in a.target): p.error('需要确认的SSH目标')
     options=['-o','BatchMode=yes','-o','ConnectTimeout=10','-o','ServerAliveInterval=10','-o','ServerAliveCountMax=2']
