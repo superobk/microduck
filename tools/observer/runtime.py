@@ -111,6 +111,7 @@ class Engine:
             (self.root/name).mkdir(exist_ok=True)
         self.lock = threading.RLock(); self.shutdown = threading.Event()
         self.bus_rescan=threading.Event()
+        self.owner_checked=0.;self.owner_pids=[];self.owner_error=None
         self.commands = queue.Queue(maxsize=8); self.events = deque(maxlen=200)
         self.record_queue = queue.Queue(maxsize=1000); self.record_drops = 0
         self.samples = deque(maxlen=1000); self.summary = deque(maxlen=3600)
@@ -197,7 +198,7 @@ class Engine:
             except queue.Full: self.record_drops += 1
 
     def start(self):
-        for fn in [self.maintenance, self.bus_loop, self.tof_loop, self.robot_loop, self.operation_loop, self.record_loop]:
+        for fn in [self.maintenance, self.ownership_loop, self.bus_loop, self.tof_loop, self.robot_loop, self.operation_loop, self.record_loop]:
             t = threading.Thread(target=fn, daemon=True); self.threads.append(t); t.start()
 
     def close(self):
@@ -238,6 +239,7 @@ class Engine:
                 bus_p99_ms=latency[min(len(latency)-1, math.ceil(len(latency)*.99)-1)] if latency else None,
                 bus_target_hz=50, record_drops=self.record_drops, version=self.version())
             out['queue_sizes']={'action':self.commands.qsize(),'record':self.record_queue.qsize(),'events':len(self.events),'imu_samples':len(self.samples),'summary':len(self.summary)}
+            out['ownership']={'age_ms':(now-self.owner_checked)*1000 if self.owner_checked else None,'pids':self.owner_pids,'error':self.owner_error}
             return out
 
     def version(self):
@@ -284,7 +286,7 @@ class Engine:
 
     def resources(self):
         row = {'load': list(os.getloadavg()), 'disk_free': __import__('shutil').disk_usage(self.root).free}
-        now=time.monotonic(); usage=os.times(); cpu=usage.user+usage.system
+        now=time.monotonic(); usage=os.times(); cpu=usage.user+usage.system+usage.children_user+usage.children_system
         if hasattr(self,'resource_previous'):
             then,last=self.resource_previous;row['cpu_percent']=(cpu-last)/(now-then)*100
         self.resource_previous=(now,cpu)
@@ -292,6 +294,29 @@ class Engine:
         if stat.exists():
             row.update({line.split(':')[0]: line.split(':',1)[1].strip() for line in stat.read_text().splitlines() if line.startswith(('VmRSS:', 'VmSize:'))})
         return row
+
+    def ownership_loop(self):
+        """Measure owners outside the 20ms acquisition budget; stale data blocks IO.
+
+        On this board proc scanning takes ~100ms in Python and ~65ms in native
+        fuser. A separate native worker keeps that cost/GIL out of packet timing.
+        Kernel TIOCEXCL/flock still guard the open; owner changes are acted on at
+        the next bus iteration after discovery. Controller state is checked too.
+        """
+        while not self.shutdown.is_set():
+            if self.offline or not self.observing or not self.bus_requested:
+                self.owner_checked=0.;self.shutdown.wait(.1);continue
+            start=time.monotonic()
+            try:
+                r=subprocess.run(['fuser','--',self.port_path],capture_output=True,text=True,timeout=.4)
+                if r.returncode not in [0,1]:raise RuntimeError('fuser无法检查UART所有权')
+                pids=[int(v) for v in r.stdout.split()]
+                self.owner_pids=[pid for pid in pids if pid!=os.getpid()];self.owner_error=None;self.owner_checked=time.monotonic()
+            except Exception as exc:self.owner_error=str(exc);self.owner_checked=0.
+            self.shutdown.wait(max(.01,.15-(time.monotonic()-start)))
+
+    def ownership_ready(self):
+        return bool(self.owner_checked and time.monotonic()-self.owner_checked<.5 and not self.owner_error and not self.owner_pids)
 
     def record_loop(self):
         while not self.shutdown.is_set():
@@ -319,7 +344,7 @@ class Engine:
         self.record_bytes += max(0, self.record_path.stat().st_size-before)
 
     def bus_loop(self):
-        port = None; failures = 0; slow_index = 0; last_slow = last_owner = 0.; target = time.monotonic()
+        port = None; failures = 0; slow_index = 0; last_slow = 0.; target = time.monotonic()
         while not self.shutdown.is_set():
             try:
                 wanted = self.observing and self.bus_requested and not self.offline and self.controllers_stopped()
@@ -330,14 +355,16 @@ class Engine:
                     if port: port.close(); port = None
                     self.state['bus_state'] = '服务订阅' if not self.controllers_stopped() else '未开启独立总线'
                     self.shutdown.wait(.1); continue
-                if time.monotonic()-last_owner > .1:
-                    owners = serial_owners(self.port_path); last_owner = time.monotonic()
-                    if owners: raise RuntimeError('UART由其他进程持有: '+str(owners))
+                if self.owner_error:raise RuntimeError('UART所有权检查失败: '+self.owner_error)
+                if self.owner_pids:raise RuntimeError('UART由其他进程持有: '+str(self.owner_pids))
+                if not self.ownership_ready():
+                    if port:port.close();port=None
+                    self.state['bus_state']='等待新鲜UART所有权检查';self.shutdown.wait(.02);continue
                 if port is None:
                     port = ReadOnlyPort(self.port_path)
                     metadata = {};bus_ids=[]
                     for ident in BUS_IDS:
-                        if not self.controllers_stopped() or serial_owners(self.port_path):raise RuntimeError('身份查询期间UART所有权变化')
+                        if not self.controllers_stopped() or not self.ownership_ready():raise RuntimeError('身份查询期间UART所有权变化')
                         try:raw, _ = port.identity(ident)
                         except TimeoutError as exc:
                             # A diagnostics portal still observes a responding IMU

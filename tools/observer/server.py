@@ -41,7 +41,10 @@ def dispatch(engine, method, args):
     if method=='job':
         if set(args)!={'id'}: raise ValueError('任务查询参数错误')
         return engine.jobs.get(args['id'],{'status':'不存在'})
-    if method=='report': return {'status':engine.snapshot(),'summary':list(engine.summary)}
+    if method=='report':
+        limit=args.get('limit',60)
+        if set(args)-{'limit'} or isinstance(limit,bool) or not isinstance(limit,int) or not 1<=limit<=300:raise ValueError('报告分页限于1–300条；完整统计用导出包')
+        return {'status':engine.snapshot(),'summary':list(engine.summary)[-limit:]}
     if method=='audit':
         ident=args.get('id','')
         if len(ident)!=32 or any(c not in '0123456789abcdef' for c in ident): raise ValueError('审计ID错误')

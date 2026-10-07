@@ -221,6 +221,18 @@ class EngineTests(unittest.TestCase):
             self.assertTrue(runtime.service_state('-.mount')['query_ok'])
         self.assertEqual(command.call_args.args[0][-2:],['--','-.mount'])
 
+    def test_report_stays_bounded_after_long_observation(self):
+        for i in range(3600):self.engine.summary.append({'i':i})
+        result=dispatch(self.engine,'report',{})
+        self.assertEqual(len(result['summary']),60);self.assertEqual(result['summary'][-1]['i'],3599)
+        with self.assertRaises(ValueError):dispatch(self.engine,'report',{'limit':3600})
+
+    def test_stale_or_other_owner_never_allows_uart(self):
+        self.assertFalse(self.engine.ownership_ready())
+        self.engine.owner_checked=time.monotonic();self.assertTrue(self.engine.ownership_ready())
+        self.engine.owner_pids=[123];self.assertFalse(self.engine.ownership_ready())
+        self.engine.owner_pids=[];self.engine.owner_checked=time.monotonic()-1;self.assertFalse(self.engine.ownership_ready())
+
 class HTTPTests(unittest.TestCase):
     def setUp(self):
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler)

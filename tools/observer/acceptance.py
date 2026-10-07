@@ -27,7 +27,7 @@ def run(duration=1800,label='first-30min',sock='/run/duck-observer/helper.sock')
     if not 60<=duration<=86400 or not re.fullmatch(r'[A-Za-z0-9_-]{1,60}',label):raise ValueError('验收窗口60–86400秒，标签只能是字母、数字、横线')
     root=DATA/'acceptance'/label;root.mkdir(parents=True,exist_ok=False)
     before=snapshot();atomic_json(root/'before.json',before)
-    start=time.monotonic();rows=[];initial=None;first_done=False
+    start=time.monotonic();rows=[];initial=None;first_done=False;tick=0
     columns=['utc','elapsed_s','version','uptime_s','servo_hz','imu_hz','tof_hz','camera_fps','p99_ms','servo_errors','imu_errors','tof_errors','rss_kib','cpu_percent','disk_free','record_drops','action_queue','record_queue','servo_status','imu_status','tof_status','camera_status']
     with (root/'samples.csv').open('w') as f:
         writer=csv.DictWriter(f,fieldnames=columns);writer.writeheader()
@@ -49,7 +49,7 @@ def run(duration=1800,label='first-30min',sock='/run/duck-observer/helper.sock')
             if elapsed>=60 and not first_done:
                 atomic_json(root/'first60.json',evaluate(rows,initial,state,60));first_done=True
             if int(elapsed)%60==0:print(json.dumps({'elapsed_s':round(elapsed),'samples':len(rows),'latest':rows[-1] if rows else None},ensure_ascii=False),flush=True)
-            time.sleep(max(.01,start+len(rows)-time.monotonic()) if rows else 1)
+            tick+=1;time.sleep(max(.01,start+tick-time.monotonic()))
     final=request_local(sock,'status');after=snapshot();atomic_json(root/'after.json',after)
     result=evaluate(rows,initial,final,duration);result.update(protected_unchanged=before==after,ended_utc=utc(),observer_continues=final['observing'],evidence=str(root))
     atomic_json(root/'final.json',result);atomic_json(root/'last.json',brief(final))

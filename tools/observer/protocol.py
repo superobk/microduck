@@ -134,9 +134,11 @@ class ReadOnlyPort:
     def __init__(self, path):
         self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         self.old = None
+        self.exclusive=False
         try:
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             fcntl.ioctl(self.fd, termios.TIOCEXCL)
+            self.exclusive=True
             self.old = termios.tcgetattr(self.fd)
             attrs = termios.tcgetattr(self.fd)
             attrs[0] = attrs[1] = attrs[3] = 0
@@ -151,7 +153,7 @@ class ReadOnlyPort:
         if self.fd is not None:
             try:
                 if self.old is not None: termios.tcsetattr(self.fd, termios.TCSANOW, self.old)
-                fcntl.ioctl(self.fd, termios.TIOCNXCL)
+                if self.exclusive:fcntl.ioctl(self.fd, termios.TIOCNXCL)
             finally:
                 os.close(self.fd); self.fd = None
 
