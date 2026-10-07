@@ -51,8 +51,8 @@ def boot_id():
 
 def service_state(unit):
     unit_name=unit if unit.endswith(('.service','.target','.mount','.slice','.socket')) else unit+'.service'
-    r = subprocess.run(['systemctl', 'show', unit_name, '--no-pager',
-        '--property=LoadState,ActiveState,SubState,MainPID,UnitFileState,FragmentPath,DropInPaths,Wants,Requires,BindsTo,PartOf,Conflicts,Upholds,Conditions'],
+    r = subprocess.run(['systemctl', 'show', '--no-pager',
+        '--property=LoadState,ActiveState,SubState,MainPID,UnitFileState,FragmentPath,DropInPaths,Wants,Requires,BindsTo,PartOf,Conflicts,Upholds,Conditions','--',unit_name],
         capture_output=True, text=True, timeout=3)
     row = dict(line.split('=', 1) for line in r.stdout.splitlines() if '=' in line)
     row['query_ok'] = r.returncode == 0
@@ -107,6 +107,7 @@ class Engine:
         for name in ['audit', 'profiles', 'records', 'exports', 'transactions']:
             (self.root/name).mkdir(exist_ok=True)
         self.lock = threading.RLock(); self.shutdown = threading.Event()
+        self.bus_rescan=threading.Event()
         self.commands = queue.Queue(maxsize=8); self.events = deque(maxlen=200)
         self.record_queue = queue.Queue(maxsize=1000); self.record_drops = 0
         self.samples = deque(maxlen=1000); self.summary = deque(maxlen=3600)
@@ -132,7 +133,30 @@ class Engine:
             'services': {}, 'service_checked_at': 0., 'audit_error': None, 'record_error': None,
             'bus_state': '被动订阅', 'fast_test': None, 'last_gap': None}
         self.last_error = {}
+        self.load_audio_history()
         self.journal('startup', {'boot': self.boot, 'offline': offline, 'bus_requested': self.bus_requested})
+
+    def load_audio_history(self):
+        path=self.root/'audio-result.json'
+        if path.exists():
+            self.state['audio'].update(json.loads(path.read_text()),can_stop=False)
+            if self.state['audio'].get('state')=='播放中':self.state['audio']['state']='上次播放结果未确认（进程重启）'
+            return
+        # Migrate the first candidate's already-audited test without replaying it.
+        # Stream the journal so years of retained evidence do not become a cache.
+        for p in sorted((self.root/'audit').glob('events-*.jsonl')):
+            with p.open() as f:
+                for line in f:
+                    row=json.loads(line);action=row.get('action');result=row.get('result',{})
+                    if row['kind']=='operation_finished' and action=='audio':
+                        self.state['audio'].update(test_id=row['transaction'],state='历史请求已接受',heard=None,route=result.get('route'))
+                    elif row['kind']=='audio_completed' and self.state['audio'].get('test_id'):
+                        self.state['audio'].update(exit_code=row['exit_code'],state='播放器正常结束' if row['exit_code']==0 else '播放器失败')
+                    elif row['kind']=='operation_finished' and action=='audio_heard' and self.state['audio'].get('test_id'):
+                        self.state['audio']['heard']=result['heard']
+
+    def save_audio(self):
+        atomic_json(self.root/'audio-result.json',{k:v for k,v in self.state['audio'].items() if k not in ['pcm_owners']})
 
     def journal(self, kind, data):
         row = {'utc': utc(), 'id': uuid.uuid4().hex, 'kind': kind, **data}
@@ -185,13 +209,13 @@ class Engine:
             for key, limit in [('servo', 2), ('imu', 1), ('tof', 1), ('camera', 3)]:
                 comp = out[key]; stamp = comp.get('received')
                 comp['age_ms'] = None if stamp is None else max(0., (now-stamp)*1000)
-                comp['status'] = ('暂停' if not self.observing else '未验证' if stamp is None else
+                comp['status'] = ('暂停' if not self.observing else '离线' if key=='servo' and comp.get('devices') and all(d.get('connected') is False for d in comp['devices'].values()) else '未验证' if stamp is None else
                     '离线' if comp.get('error') and now-stamp > limit else '过期' if now-stamp > limit else '实时')
                 times = [v for v in self.receives[key] if now-v <= 10]
                 comp['hz'] = (len(times)-1)/(times[-1]-times[0]) if len(times)>1 and times[-1]>times[0] else None
             for device in out['servo']['devices'].values():
                 stamp = device.get('received')
-                device['status'] = '实时' if stamp and now-stamp < 2 and self.observing else '过期' if stamp else '未验证'
+                device['status'] = ('离线' if device.get('connected') is False else '实时' if stamp and now-stamp < 2 and self.observing else '过期' if stamp else '未验证')
                 device['age_ms'] = (now-stamp)*1000 if stamp else None
                 device['slow_age_ms'] = (now-device['slow_received'])*1000 if device.get('slow_received') else None
             imu = out['imu']
@@ -296,6 +320,9 @@ class Engine:
         while not self.shutdown.is_set():
             try:
                 wanted = self.observing and self.bus_requested and not self.offline and self.controllers_stopped()
+                if self.bus_rescan.is_set():
+                    if port:port.close();port=None
+                    self.bus_rescan.clear()
                 if not wanted:
                     if port: port.close(); port = None
                     self.state['bus_state'] = '服务订阅' if not self.controllers_stopped() else '未开启独立总线'
@@ -305,10 +332,17 @@ class Engine:
                     if owners: raise RuntimeError('UART由其他进程持有: '+str(owners))
                 if port is None:
                     port = ReadOnlyPort(self.port_path)
-                    metadata = {}
+                    metadata = {};bus_ids=[]
                     for ident in BUS_IDS:
                         if not self.controllers_stopped() or serial_owners(self.port_path):raise RuntimeError('身份查询期间UART所有权变化')
-                        raw, _ = port.identity(ident); model = int.from_bytes(raw[:2], 'little')
+                        try:raw, _ = port.identity(ident)
+                        except TimeoutError as exc:
+                            # A diagnostics portal still observes a responding IMU
+                            # when servo power is off. Never invent missing leg data.
+                            if ident in SERVO_IDS:metadata[str(ident)]={'id':ident,'slot':SLOTS[ident],'connected':False,'error':str(exc)}
+                            else:self.error('imu',exc)
+                            continue
+                        model = int.from_bytes(raw[:2], 'little')
                         if ident == 200:
                             if (model, raw[2]) != (1030, 3): raise RuntimeError(f'IMU身份未核验: {model}/FW{raw[2]}')
                             self.state['imu']['identity'] = {'id':200, 'model':model, 'firmware':raw[2]}
@@ -317,12 +351,15 @@ class Engine:
                             data, status = port.read(ident, 64, 7)
                             if data[0] != 0: raise RuntimeError(f'ID{ident}扭矩非零；只读采集未开启')
                             metadata[str(ident)] = {'id':ident, 'slot':SLOTS[ident], 'model':model, 'firmware':raw[2],
-                                'torque':data[0], 'hardware_error':data[6], 'status_byte':status, 'slow_received':time.monotonic()}
+                                'connected':True,'torque':data[0], 'hardware_error':data[6], 'status_byte':status, 'slow_received':time.monotonic()}
+                        bus_ids.append(ident)
+                    if not bus_ids:raise RuntimeError('没有真实器件应答，需检查连接后重新开启')
                     with self.lock: self.state['servo']['devices'] = metadata
-                    self.journal('bus_acquired', {'port':self.port_path, 'ids':BUS_IDS, 'writes':False})
+                    self.journal('bus_acquired', {'port':self.port_path, 'ids':bus_ids,'missing':[i for i in BUS_IDS if i not in bus_ids], 'writes':False})
+                    connected_servos=[i for i in bus_ids if i in SERVO_IDS]
                     target = time.monotonic(); failures = 0
                 if not self.controllers_stopped(): raise RuntimeError('控制器状态变化，释放UART')
-                begin = time.monotonic(); rows = port.sync(); received = time.monotonic()
+                begin = time.monotonic(); rows = port.sync(ids=bus_ids); received = time.monotonic()
                 devices = {}; imu = None
                 for ident, status, raw in rows:
                     if status & 0x7f or len(raw) != 12: raise ValueError('设备错误/短块 ID'+str(ident))
@@ -330,12 +367,13 @@ class Engine:
                     else: devices[str(ident)] = {**servo_decode(ident, raw, status), 'received':received}
                 with self.lock:
                     for ident, data in devices.items(): self.state['servo']['devices'].setdefault(ident, {}).update(data)
-                self.update('servo', {'source':'独立普通Sync Read'}, received)
-                self.update('imu', imu, received)
-                self.latencies.append((received-begin)*1000); self.state['bus_state'] = '只读采集中'; failures = 0
+                if devices:self.update('servo', {'source':'独立普通Sync Read'}, received)
+                if imu:self.update('imu', imu, received)
+                self.latencies.append((received-begin)*1000)
+                self.state['bus_state'] = f'只读采集中：舵机 {len(connected_servos)}/11 · IMU {"有" if 200 in bus_ids else "无"}'; failures = 0
                 # Spread slow telemetry over the second, rather than a 33-read burst.
-                if received-last_slow >= .09:
-                    ident = SERVO_IDS[slow_index % len(SERVO_IDS)]; slow_index += 1; last_slow = received
+                if connected_servos and received-last_slow >= .09:
+                    ident = connected_servos[slow_index % len(connected_servos)]; slow_index += 1; last_slow = received
                     data, status = port.read(ident, 144, 3); flags, _ = port.read(ident, 64, 7)
                     if flags[0]: raise RuntimeError(f'ID{ident}扭矩状态变化，释放UART')
                     with self.lock:
@@ -443,7 +481,9 @@ class Engine:
     def perform(self, ident, action, args):
         if action in {'observe','record'}:
             if set(args)!={'enabled'} or not isinstance(args['enabled'],bool): raise ValueError('enabled必须为布尔')
-            if action=='observe': self.observing=args['enabled']; self.bus_requested=args['enabled']
+            if action=='observe':
+                self.observing=args['enabled']; self.bus_requested=args['enabled']
+                if args['enabled']:self.bus_rescan.set()
             else: self.recording=args['enabled']
             atomic_json(self.root/'desired.json', {'boot':self.boot, 'observing':self.observing,
                 'bus_requested':self.bus_requested,'recording':self.recording})
@@ -462,14 +502,17 @@ class Engine:
             return self.change_service(ident,tx['unit'],'start' if tx['before']['ActiveState']=='active' else 'stop')
         if action=='calibrate': return self.calibrate(ident,args)
         if action=='audio':
-            result=self.play_audio(args); self.state['audio']['test_id']=ident; return result
+            try:result=self.play_audio(args)
+            except Exception as exc:
+                self.state['audio'].update(test_id=None,state='测试失败',error=str(exc));self.save_audio();raise
+            self.state['audio'].update(test_id=ident,error=None);self.save_audio();return result
         if action=='audio_stop':
             if args: raise ValueError('停止播放没有参数')
             return self.stop_audio()
         if action=='audio_heard':
             if set(args)!={'heard'} or not isinstance(args['heard'],bool): raise ValueError('heard必须为布尔')
             if not self.state['audio'].get('test_id'): raise RuntimeError('需要先完成一次声音测试请求')
-            self.state['audio']['heard']=args['heard']; return {'heard':args['heard'],'evidence':'现场人工确认'}
+            self.state['audio']['heard']=args['heard'];self.save_audio();return {'heard':args['heard'],'evidence':'现场人工确认'}
         if action=='fast_test':
             if args: raise ValueError('Fast诊断没有可调指令')
             if self.offline or self.bus_requested or not self.controllers_stopped(): raise RuntimeError('先停止采集，且控制器必须停止')
@@ -671,6 +714,7 @@ class Engine:
             code=self.audio_child.returncode; self.audio_child=None
             self.state['audio'].update(state='播放器正常结束' if code==0 else '播放器失败',exit_code=code,can_stop=False)
             self.journal('audio_completed', {'exit_code':code,'heard':self.state['audio'].get('heard')})
+            self.save_audio()
 
     def play_audio(self,args):
         if set(args)-{'level'}: raise ValueError('声音参数不允许')
@@ -732,5 +776,6 @@ class Engine:
             try: child.wait(timeout=1)
             except subprocess.TimeoutExpired: os.killpg(child.pid,signal.SIGKILL); child.wait(timeout=1)
             self.audio_child=None; self.state['audio'].update(state='本次播放器已停止',can_stop=False)
+            self.save_audio()
             return {'stopped':True,'owner':'portal'}
         return {'stopped':False,'note':'门户未持有播放器；原服务短音自然结束'}

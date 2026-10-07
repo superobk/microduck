@@ -58,8 +58,11 @@ def identity_request(ident):
     if ident not in BUS_IDS: raise ValueError('只允许真实器件身份查询')
     return encode(ident,1)
 
-def sync_request(fast=False):
-    return encode(254, 0x8a if fast else 0x82, struct.pack('<HH', 124, 12) + bytes(BUS_IDS))
+def sync_request(fast=False,ids=None):
+    ids=BUS_IDS if ids is None else ids
+    if not ids or len(ids)!=len(set(ids)) or any(i not in BUS_IDS for i in ids) or (fast and ids!=BUS_IDS):
+        raise ValueError('只允许已核验真实ID子集；Fast必须全链')
+    return encode(254, 0x8a if fast else 0x82, struct.pack('<HH', 124, 12) + bytes(ids))
 
 def parse_fast(packet):
     # Fast Sync status has no byte stuffing; check aggregate CRC and every ID.
@@ -191,5 +194,6 @@ class ReadOnlyPort:
         if status & 0x7f or len(data)!=3:raise ValueError('Ping身份回包无效')
         return data,status
 
-    def sync(self, fast=False):
-        return self._exchange(sync_request(fast), BUS_IDS, fast, .2 if fast else .025)
+    def sync(self, fast=False, ids=None):
+        ids=BUS_IDS if ids is None else ids
+        return self._exchange(sync_request(fast,ids), ids, fast, .2 if fast else .025)

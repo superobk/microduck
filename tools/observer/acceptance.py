@@ -65,6 +65,7 @@ def evaluate(rows,initial,final,duration):
     rss_end=statistics.median([r['rss_kib'] for r in rows[-60:]]) if rows else None
     growth=None if rss_start is None or rss_end is None else rss_end-rss_start
     hz=mean('servo_hz');p99=maximum('p99_ms')
+    connected=sum(d.get('connected') is True for d in final['servo']['devices'].values())
     return {'window_s':duration,'samples':len(rows),'sample_span_s':rows[-1]['elapsed_s']-rows[0]['elapsed_s'] if rows else 0,
         'average_servo_hz':hz,'average_imu_hz':mean('imu_hz'),'average_tof_hz':mean('tof_hz'),'average_camera_capture_fps':mean('camera_fps'),
         'max_rolling_bus_p99_ms':p99,'error_delta':deltas,'non_live_samples_after_warmup':stale,
@@ -72,7 +73,8 @@ def evaluate(rows,initial,final,duration):
         'rss_start_kib':rss_start,'rss_end_kib':rss_end,'rss_growth_kib':growth,
         'queue_max':{'action':maximum('action_queue'),'record':maximum('record_queue')},'record_drops':final['record_drops']-initial['record_drops'],
         'same_helper_process':final['uptime_s']>=initial['uptime_s']+max(0,duration-3),
-        'ordinary_bus_pass':bool(hz and hz>=45 and p99 is not None and p99<20 and not stale['servo'] and not stale['imu'] and not deltas['servo'] and not deltas['imu']),
+        'connected_servos':connected,'imu_only_pass':bool(mean('imu_hz') and mean('imu_hz')>=45 and p99 is not None and p99<20 and not stale['imu'] and not deltas['imu']),
+        'ordinary_bus_pass':bool(connected==11 and hz and hz>=45 and p99 is not None and p99<20 and not stale['servo'] and not stale['imu'] and not deltas['servo'] and not deltas['imu']),
         'limits':'采集统计与浏览器实际解码分别验收；RSS为趋势证据，无长期寿命保证；结束窗口不停止采集'}
 
 if __name__=='__main__':

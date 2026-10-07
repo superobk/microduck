@@ -46,6 +46,10 @@ class ProtocolTests(unittest.TestCase):
             ident,instruction,body=p.decode(p.identity_request(sid))
             self.assertEqual((ident,instruction,body),(sid,1,b''))
         with self.assertRaises(ValueError):p.identity_request(30)
+        _,_,data=p.decode(p.sync_request(ids=[10,200]));self.assertEqual(list(data[4:]),[10,200])
+        for ids in [[],[30],[10,10],[1]]:
+            with self.assertRaises(ValueError):p.sync_request(ids=ids)
+        with self.assertRaises(ValueError):p.sync_request(True,[200])
 
     def test_servo_units_and_right_slots(self):
         data=p.servo_decode(10,struct.pack('<hhii',0,-42,60,2048),128)
@@ -198,6 +202,24 @@ class EngineTests(unittest.TestCase):
         self.engine.inspect_audio()
         self.assertEqual(self.engine.state['audio']['state'],'播放器正常结束')
         self.assertIsNone(self.engine.state['audio']['heard']);self.assertFalse(self.engine.state['audio']['can_stop'])
+
+    def test_audio_confirmation_survives_own_restart(self):
+        self.engine.state['audio'].update(test_id='a'*32,state='播放器正常结束',exit_code=0)
+        self.engine.perform('b'*32,'audio_heard',{'heard':True})
+        restored=Engine(self.tmp.name,config='/nonexistent',offline=True)
+        self.assertTrue(restored.state['audio']['heard']);self.assertEqual(restored.state['audio']['exit_code'],0)
+
+    def test_absent_servos_do_not_become_connected(self):
+        self.engine.state['servo']['devices']={'20':{'id':20,'connected':False}}
+        snap=self.engine.snapshot()
+        self.assertEqual(snap['servo']['status'],'离线');self.assertEqual(snap['servo']['devices']['20']['status'],'离线')
+        self.assertNotIn('position',snap['servo']['devices']['20'])
+
+    def test_root_mount_is_passed_after_option_separator(self):
+        from unittest.mock import Mock
+        with patch('runtime.subprocess.run',return_value=Mock(returncode=0,stdout='ActiveState=active\n')) as command:
+            self.assertTrue(runtime.service_state('-.mount')['query_ok'])
+        self.assertEqual(command.call_args.args[0][-2:],['--','-.mount'])
 
 class HTTPTests(unittest.TestCase):
     def setUp(self):
