@@ -123,19 +123,22 @@ def switch_release(verb,version=None,previous=False):
         return {'version':manifest['version'],'previous':prior,'controller_changes':False,'already_active':True}
     tx={'old':str(old),'target':str(target),'verb':verb,'before':before}
     log('release_started',**tx)
+    from station import enforce_manual
+    enforce_manual()
     run(['systemctl','stop','duck-observer.service','duck-observer-helper.service'])
     try:
-        link_current(target);run(['systemctl','daemon-reload']);run(['systemctl','start','duck-observer.service'])
-        wait_healthy()
+        # Installation/rollback is file preparation, not permission to run a
+        # CPU-consuming hardware station. Only station start launches it.
+        link_current(target);run(['systemctl','daemon-reload'])
         after=snapshot()
         if after!=before: raise RuntimeError('原程序/服务发生变化；需查看审计')
         (BASE/'previous').unlink(missing_ok=True);(BASE/'previous').symlink_to(old)
         log('release_completed',version=manifest['version'],before=before,after=after)
-        return {'version':manifest['version'],'previous':old.name,'controller_changes':False}
+        return {'version':manifest['version'],'previous':old.name,'controller_changes':False,'running':False,'requires_manual_start':True}
     except Exception:
         log('release_failed',old=str(old),target=str(target))
         run(['systemctl','stop','duck-observer.service','duck-observer-helper.service'])
-        link_current(old);run(['systemctl','daemon-reload']);run(['systemctl','start','duck-observer.service']);wait_healthy()
+        link_current(old);run(['systemctl','daemon-reload'])
         log('release_recovered',version=old.name,protected_after=snapshot());raise
 
 def install(bundle,sha,version):
@@ -180,12 +183,12 @@ def install(bundle,sha,version):
     (dest/'helper.service').write_text(f'''[Unit]
 Description=Duck Observer private hardware helper
 After=local-fs.target
+PartOf=duck-observer.service
 [Service]
 User=root
 Group=duck-observer
 ExecStart=/usr/bin/python3 {BASE}/current/server.py --helper --web-uid {account.pw_uid}
-Restart=on-failure
-RestartSec=3
+Restart=no
 UMask=0007
 RuntimeDirectory=duck-observer
 RuntimeDirectoryMode=0750
@@ -194,8 +197,6 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadWritePaths={DATA} /run/duck-observer
-[Install]
-WantedBy=multi-user.target
 ''')
     (dest/'web.service').write_text(f'''[Unit]
 Description=Duck Observer LAN portal
@@ -205,18 +206,20 @@ After=duck-observer-helper.service
 User=duck-observer
 Group=duck-observer
 ExecStart=/usr/bin/python3 {BASE}/current/server.py
-Restart=on-failure
-RestartSec=3
+Restart=no
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
-[Install]
-WantedBy=multi-user.target
 ''')
     for name in ['helper.service','web.service']:manifest['files'][name]=digest(dest/name)
     (dest/'MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n')
+    # The audited installer is executed from an in-memory loader. Import the
+    # newly staged lifecycle module, including when upgrading a pre-manual
+    # release that did not contain station.py.
+    import sys
+    sys.path.insert(0,str(dest))
     first=not (BASE/'current').exists()
     if first:
         for unit in UNITS:
@@ -228,15 +231,13 @@ WantedBy=multi-user.target
             Path('/etc/systemd/system',unit+'.service').symlink_to(target)
         log('install_started',version=version,bundle_sha256=sha,protected_before=before)
         try:
-            run(['systemctl','daemon-reload']);run(['systemctl','enable','duck-observer.service']);run(['systemctl','start','duck-observer.service'])
-            wait_healthy()
+            run(['systemctl','daemon-reload'])
             if snapshot()!=before: raise RuntimeError('原服务/文件变化；保留备份，不自动恢复原控制器')
         except Exception:
             # First install has no previous release. Remove only the two links we
             # created; leave every release, backup, journal and original daemon.
             log('first_install_failed',version=version,protected_after=snapshot())
-            run(['systemctl','disable','--now','duck-observer.service'])
-            run(['systemctl','stop','duck-observer-helper.service'])
+            run(['systemctl','stop','duck-observer.service','duck-observer-helper.service'])
             ensure_owned_units()
             for unit in UNITS: Path('/etc/systemd/system',unit+'.service').unlink()
             (BASE/'current').unlink();run(['systemctl','daemon-reload'])
@@ -247,12 +248,13 @@ WantedBy=multi-user.target
     after=snapshot()
     log('install_completed',version=version,protected_after=after)
     if before!=after: raise RuntimeError('受保护服务或原文件变化；禁止宣称安装验收通过')
-    return {'installed':version,'port':8766,'protected_unchanged':True,'backup':str(backup)}
+    return {'installed':version,'port':8766,'protected_unchanged':True,'backup':str(backup),'running':False,'requires_manual_start':True}
 
 def uninstall():
     if os.geteuid()!=0: raise RuntimeError('需要root')
     ensure_owned_units();before=snapshot();log('uninstall_started',before=before)
-    run(['systemctl','disable','--now','duck-observer.service']);run(['systemctl','stop','duck-observer-helper.service'])
+    from station import enforce_manual
+    enforce_manual();run(['systemctl','stop','duck-observer.service','duck-observer-helper.service'])
     for unit in UNITS: Path('/etc/systemd/system',unit+'.service').unlink()
     run(['systemctl','daemon-reload']);after=snapshot()
     if before!=after: raise RuntimeError('原服务变化；审计保留')

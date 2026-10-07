@@ -24,7 +24,7 @@ MEANING={
     'fast_test':'独立Fast诊断；不更改普通读取模式，也不写入控制寄存器'}
 
 def equivalent(action,args):
-    if action in ('observe','record'):return [action,'on' if args.get('enabled') else 'off']
+    if action in ('observe','record'):return [action,'on' if args.get('enabled') else 'off']+(['--hz',str(args['hz'])] if action=='observe' and 'hz' in args else [])
     if action=='service':return ['service',args['unit'],args['verb']]
     if action=='restore':return ['restore','--transaction',args['transaction']]
     if action=='calibrate':return ['calibrate',args['mode']]+(['--mount',*map(str,args['mount'])] if 'mount' in args else [])
@@ -45,7 +45,8 @@ def append(source,destination):
                 row=json.loads(line);ident=row['id'];kind=row['kind']
                 if '<!-- audit:'+ident+' -->' in prior:continue
                 if kind not in {'operation_queued','operation_finished','operation_failed','command_finished',
-                    'audio_player_started','audio_completed','release_started','release_completed','install_completed'}:continue
+                    'audio_player_started','audio_completed','release_started','release_completed','install_completed',
+                    'station_started','station_completed','manual_boot_link_removed','manual_mode_requested','manual_mode_stopped'}:continue
                 action=row.get('action');reason=MEANING.get(action,'保留自有安装、版本切换或播放器执行证据')
                 text=[f'\n<!-- audit:{ident} -->\n### {row["utc"]} · {action or kind}\n',
                     f'操作意义：{reason}。证据：[原始审计第{line_number}行]({path.resolve()}:{line_number})。',

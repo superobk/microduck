@@ -52,6 +52,10 @@ def kernel_uart(port):
 CONTROLLERS = ['robotd', 'zero3w-11servo-candidate']
 WATCH_UNITS = CONTROLLERS + ['updaterd', 'tofd', 'mediad']
 ALLOWED_UNITS = {'tofd', 'mediad'}
+# User's temporary diagnostic waiver. Exclude ID14 requests so its timeout
+# cannot block other devices; do not fabricate identity, angles or connected.
+# This is never a robotd/control-policy change or a full 11-servo acceptance.
+DIAGNOSTIC_EXEMPT_IDS = {14}
 
 def utc():
     return dt.datetime.now(dt.timezone.utc).isoformat()
@@ -142,12 +146,14 @@ class Engine:
         if (self.root/'profile.json').exists(): self.profile = json.loads((self.root/'profile.json').read_text())
         wanted = {}
         if (self.root/'desired.json').exists(): wanted = json.loads((self.root/'desired.json').read_text())
-        # Restore UART intent only within the same boot. A board reboot starts passive.
-        self.observing = wanted.get('observing', True) if wanted.get('boot') == self.boot else True
-        self.bus_requested = wanted.get('bus_requested', False) if wanted.get('boot') == self.boot else False
+        # Every process launch starts idle. Starting the station and starting
+        # acquisition are separate explicit operations; old intent is history.
+        self.observing = False
+        self.bus_requested = False
+        self.bus_hz = 20
         self.bus_fault=wanted.get('bus_fault')
         if self.bus_fault:self.bus_requested=False  # upgrades must not rearm a latched fault
-        self.recording = wanted.get('recording', False) if wanted.get('boot') == self.boot else False
+        self.recording = False
         self.record_file = None; self.record_hour = None; self.record_cap = 2*1024**3
         self.record_bytes = sum(p.stat().st_size for p in (self.root/'records').glob('*.gz'))
         self.jobs = {}; self.audio_child = None; self.threads = []
@@ -250,6 +256,9 @@ class Engine:
                 device['status'] = ('离线' if device.get('connected') is False else '实时' if stamp and now-stamp < 2 and self.observing else '过期' if stamp else '未验证')
                 device['age_ms'] = (now-stamp)*1000 if stamp else None
                 device['slow_age_ms'] = (now-device['slow_received'])*1000 if device.get('slow_received') else None
+            for ident in DIAGNOSTIC_EXEMPT_IDS:
+                device=out['servo']['devices'].setdefault(str(ident),{'id':ident,'slot':SLOTS[ident],'status':'未验证'})
+                device.update(check_status='默认OK（用户暂时豁免）',exempt=True)
             imu = out['imu']
             if 'trunk_quat' in imu:
                 # Service quaternions are already in trunk axes. Do not apply +90Y twice.
@@ -265,7 +274,7 @@ class Engine:
                 session='observer-'+self.boot[:8], jobs=list(self.jobs.values())[-20:],
                 events=list(self.events)[-25:], record_bytes=self.record_bytes, record_cap=self.record_cap,
                 bus_p99_ms=latency[min(len(latency)-1, math.ceil(len(latency)*.99)-1)] if latency else None,
-                bus_target_hz=50, record_drops=self.record_drops, version=self.version())
+                bus_target_hz=self.bus_hz, diagnostic_exempt_ids=sorted(DIAGNOSTIC_EXEMPT_IDS), record_drops=self.record_drops, version=self.version())
             out['queue_sizes']={'action':self.commands.qsize(),'record':self.record_queue.qsize(),'events':len(self.events),'imu_samples':len(self.samples),'summary':len(self.summary)}
             out['ownership']={'age_ms':(now-self.owner_checked)*1000 if self.owner_checked else None,'pids':self.owner_pids,'error':self.owner_error}
             return out
@@ -321,7 +330,7 @@ class Engine:
                 os.chmod(self.root/'summary.jsonl', 0o640)
             except Exception as exc:
                 with self.lock: self.state['record_error'] = str(exc)
-            self.shutdown.wait(1)
+            self.shutdown.wait(1 if self.observing else 5)
 
     def resources(self):
         row = {'load': list(os.getloadavg()), 'disk_free': __import__('shutil').disk_usage(self.root).free}
@@ -352,7 +361,9 @@ class Engine:
                 pids=[int(v) for v in r.stdout.split()]
                 self.owner_pids=[pid for pid in pids if pid!=os.getpid()];self.owner_error=None;self.owner_checked=time.monotonic()
             except Exception as exc:self.owner_error=str(exc);self.owner_checked=0.
-            self.shutdown.wait(max(.01,.15-(time.monotonic()-start)))
+            # Halve expensive fuser scans while retaining the existing 500ms
+            # freshness gate and immediate close when an owner is detected.
+            self.shutdown.wait(max(.01,.3-(time.monotonic()-start)))
 
     def ownership_ready(self):
         return bool(self.owner_checked and time.monotonic()-self.owner_checked<.5 and not self.owner_error and not self.owner_pids)
@@ -405,6 +416,9 @@ class Engine:
                     port = ReadOnlyPort(self.port_path)
                     metadata = {};bus_ids=[]
                     for ident in BUS_IDS:
+                        if ident in DIAGNOSTIC_EXEMPT_IDS:
+                            metadata[str(ident)]={'id':ident,'slot':SLOTS[ident],'exempt':True}
+                            continue
                         if not self.controllers_stopped() or not self.ownership_ready():raise RuntimeError('身份查询期间UART所有权变化')
                         try:raw, _ = port.identity(ident)
                         except TimeoutError as exc:
@@ -442,7 +456,7 @@ class Engine:
                 if devices:self.update('servo', {'source':'独立普通Sync Read'}, received)
                 if imu:self.update('imu', imu, received)
                 self.latencies.append((received-begin)*1000)
-                self.state['bus_state'] = f'只读采集中：舵机 {len(connected_servos)}/11 · IMU {"有" if 200 in bus_ids else "无"}'; failures = 0
+                self.state['bus_state'] = f'只读采集中：舵机 {len(connected_servos)}/10 · ID14豁免 · {self.bus_hz}Hz · IMU {"有" if 200 in bus_ids else "无"}'; failures = 0
                 # Spread slow telemetry over the second, rather than a 33-read burst.
                 if connected_servos and received-last_slow >= .09:
                     ident = connected_servos[slow_index % len(connected_servos)]; slow_index += 1; last_slow = received
@@ -452,7 +466,7 @@ class Engine:
                         self.state['servo']['devices'][str(ident)].update(voltage=int.from_bytes(data[:2],'little')*.1,
                             temperature=data[2], torque=flags[0], hardware_error=flags[6], slow_received=time.monotonic(),
                             voltage_condition='用户已接受约7.4V；原始告警保留')
-                target += .02; delay = target-time.monotonic()
+                target += 1/self.bus_hz; delay = target-time.monotonic()
                 if delay > 0: self.shutdown.wait(delay)
                 else: target = time.monotonic()
             except Exception as exc:
@@ -563,13 +577,16 @@ class Engine:
 
     def perform(self, ident, action, args):
         if action in {'observe','record'}:
-            if set(args)!={'enabled'} or not isinstance(args['enabled'],bool): raise ValueError('enabled必须为布尔')
+            if set(args)-({'enabled','hz'} if action=='observe' else {'enabled'}) or 'enabled' not in args or not isinstance(args['enabled'],bool): raise ValueError('enabled必须为布尔')
             if action=='observe':
+                hz=args.get('hz',20)
+                if type(hz)!=int or hz not in [20,50]:raise ValueError('诊断采集仅支持20/50Hz')
+                self.bus_hz=hz
                 self.observing=args['enabled']; self.bus_requested=args['enabled']
                 if args['enabled']:self.bus_fault=None;self.bus_rescan.set()
             else: self.recording=args['enabled']
             self.save_desired()
-            return {'observing':self.observing,'bus_requested':self.bus_requested,'recording':self.recording}
+            return {'observing':self.observing,'bus_requested':self.bus_requested,'recording':self.recording,'bus_target_hz':self.bus_hz,'diagnostic_exempt_ids':sorted(DIAGNOSTIC_EXEMPT_IDS)}
         if action=='service':
             if set(args)!={'unit','verb'}: raise ValueError('服务参数不允许')
             return self.change_service(ident,args['unit'],args['verb'])
@@ -597,6 +614,9 @@ class Engine:
             self.state['audio']['heard']=args['heard'];self.save_audio();return {'heard':args['heard'],'evidence':'现场人工确认'}
         if action=='fast_test':
             if args: raise ValueError('Fast诊断没有可调指令')
+            if DIAGNOSTIC_EXEMPT_IDS:
+                result={'pass':None,'status':'未执行','reason':'ID14暂时豁免；完整Fast诊断需要全部11舵机，不阻塞其他观测'}
+                self.state['fast_test']=result;return result
             if self.offline or self.bus_requested or not self.controllers_stopped(): raise RuntimeError('先停止采集，且控制器必须停止')
             if serial_owners(self.port_path): raise RuntimeError('串口被占用')
             port=ReadOnlyPort(self.port_path)

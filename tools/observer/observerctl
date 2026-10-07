@@ -11,14 +11,19 @@ def main():
     q=sub.add_parser('status');q.add_argument('--brief',action='store_true')
     sub.add_parser('report'); sub.add_parser('export'); sub.add_parser('fast-test')
     q=sub.add_parser('acceptance');q.add_argument('--duration',type=int,default=1800);q.add_argument('--label',default='first-30min')
+    q=sub.add_parser('station');q.add_argument('verb',choices=['start','stop','status'])
     for name in ['observe','record']:
         q=sub.add_parser(name); q.add_argument('state',choices=['on','off'])
+        if name=='observe':q.add_argument('--hz',type=int,choices=[20,50],default=20)
     q=sub.add_parser('service'); q.add_argument('unit',choices=['tofd','mediad']); q.add_argument('verb',choices=['start','stop','restart'])
     q=sub.add_parser('restore'); q.add_argument('--transaction',required=True)
     q=sub.add_parser('audio'); q.add_argument('verb',choices=['test','stop','heard','not-heard']); q.add_argument('--level',type=float,default=.1)
     q=sub.add_parser('calibrate'); q.add_argument('mode',choices=['mount','bias','yaw','reference','undo']); q.add_argument('--mount',nargs=4,type=float)
     q=sub.add_parser('release'); q.add_argument('verb',choices=['activate','rollback','uninstall']); q.add_argument('--previous',action='store_true'); q.add_argument('--version')
     a=p.parse_args()
+    if a.command=='station':
+        from station import operate
+        print(json.dumps(operate(a.verb),ensure_ascii=False,indent=2));return
     if a.command=='acceptance':
         from acceptance import run
         run(a.duration,a.label,a.socket);return
@@ -33,6 +38,7 @@ def main():
         print(json.dumps(uninstall() if a.verb=='uninstall' else switch_release(a.verb,a.version,a.previous),ensure_ascii=False,indent=2)); return
     action=a.command; args={}
     if action in ['observe','record']: args={'enabled':a.state=='on'}
+    if action=='observe':args['hz']=a.hz
     elif action=='service': args={'unit':a.unit,'verb':a.verb}
     elif action=='restore': args={'transaction':a.transaction}
     elif action=='audio':

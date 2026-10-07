@@ -110,6 +110,7 @@ class ProtocolTests(unittest.TestCase):
 class EngineTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.engine=Engine(self.tmp.name,config='/nonexistent',offline=True)
+        self.engine.observing=True  # fixture represents explicitly enabled observation
     def tearDown(self):
         if self.engine.record_file:self.engine.record_file.close()
         self.tmp.cleanup()
@@ -167,10 +168,45 @@ class EngineTests(unittest.TestCase):
     def test_restart_boot_intent(self):
         self.engine.perform('a'*32,'observe',{'enabled':True})
         restored=Engine(self.tmp.name,config='/nonexistent',offline=True)
-        self.assertTrue(restored.bus_requested)
+        self.assertFalse(restored.bus_requested);self.assertFalse(restored.observing)
         with patch('runtime.boot_id',return_value='different-boot'):
             rebooted=Engine(self.tmp.name,config='/nonexistent',offline=True)
         self.assertFalse(rebooted.bus_requested)
+
+    def test_manual_launch_does_not_restore_recording_or_uart(self):
+        self.engine.perform('a'*32,'observe',{'enabled':True,'hz':50})
+        self.engine.perform('b'*32,'record',{'enabled':True})
+        restored=Engine(self.tmp.name,config='/nonexistent',offline=True)
+        self.assertFalse(restored.recording);self.assertFalse(restored.bus_requested)
+        self.assertFalse(restored.observing);self.assertEqual(restored.bus_hz,20)
+        for hz in [0,1,100,True,'20']:
+            with self.assertRaises(ValueError):restored.perform('c'*32,'observe',{'enabled':True,'hz':hz})
+
+    def test_id14_waiver_does_not_fabricate_telemetry_or_send_requests(self):
+        from unittest.mock import Mock
+        snap=self.engine.snapshot();d=snap['servo']['devices']['14']
+        self.assertTrue(d['exempt']);self.assertIn('默认OK',d['check_status'])
+        self.assertNotIn('connected',d);self.assertNotIn('position',d)
+        port=Mock()
+        port.identity.side_effect=lambda ident:((1030 if ident==200 else 1200).to_bytes(2,'little')+bytes([3 if ident==200 else 52]),0)
+        port.read.return_value=(bytes(7),0)
+        raw=struct.pack('<hhh',0,0,0)+struct.pack('<eee',0,math.sqrt(.5),0)
+        def sync(*,ids):
+            self.engine.shutdown.set()
+            return [(i,0,raw if i==200 else struct.pack('<hhii',0,0,0,2048)) for i in ids]
+        port.sync.side_effect=sync
+        self.engine.offline=False;self.engine.bus_requested=True
+        with patch('runtime.ReadOnlyPort',return_value=port),patch.object(self.engine,'controllers_stopped',return_value=True),patch.object(self.engine,'ownership_ready',return_value=True):
+            self.engine.bus_loop()
+        self.assertEqual(port.sync.call_args.kwargs['ids'],[200,20,21,22,23,24,34,10,11,12,13])
+        self.assertNotIn(14,[call.args[0] for call in port.identity.call_args_list])
+        self.assertNotIn(14,[call.args[0] for call in port.read.call_args_list])
+        self.assertIsNone(self.engine.snapshot()['servo']['devices']['14'].get('connected'))
+
+    def test_fast_is_explicitly_skipped_under_waiver(self):
+        with patch('runtime.ReadOnlyPort') as opener:
+            result=self.engine.perform('a'*32,'fast_test',{})
+        self.assertIsNone(result['pass']);self.assertEqual(result['status'],'未执行');opener.assert_not_called()
 
     def test_export_contains_full_audit_and_csv(self):
         result=self.engine.perform('a'*32,'export',{})
@@ -281,7 +317,7 @@ class EngineTests(unittest.TestCase):
         rows=[(200,0,raw)]+[(sid,128,bytes(12)) for sid in p.SERVO_IDS]
         port=Mock();port.read.return_value=(bytes(7),0);port.sync.return_value=rows
         self.engine.offline=False;self.engine.bus_requested=False
-        with patch('runtime.ReadOnlyPort',return_value=port),patch('runtime.serial_owners',return_value=[]),patch.object(self.engine,'controllers_stopped',return_value=True):
+        with patch('runtime.DIAGNOSTIC_EXEMPT_IDS',set()),patch('runtime.ReadOnlyPort',return_value=port),patch('runtime.serial_owners',return_value=[]),patch.object(self.engine,'controllers_stopped',return_value=True):
             result=self.engine.perform('a'*32,'fast_test',{})
         self.assertTrue(result['pass']);self.assertEqual(result['count'],20)
         port.close.assert_called_once()
@@ -338,6 +374,40 @@ class AcceptanceTests(unittest.TestCase):
             self.assertIsNotNone(continuity(first,{**first,**change}))
 
 class ArchiveTests(unittest.TestCase):
+    def test_version_switch_keeps_station_stopped(self):
+        import install
+        with tempfile.TemporaryDirectory() as directory:
+            base=Path(directory);new=base/'releases/new';old=base/'releases/old'
+            new.mkdir(parents=True);old.mkdir();(base/'current').symlink_to(old)
+            with patch.object(install,'BASE',base),patch.object(install.os,'geteuid',return_value=0),patch.object(install,'ensure_owned_units'),patch.object(install,'snapshot',return_value={}),patch.object(install,'verify_release',return_value={'version':'new'}),patch.object(install,'log'),patch('station.enforce_manual'),patch.object(install,'run') as command:
+                result=install.switch_release('activate','new')
+            self.assertFalse(result['running']);self.assertTrue(result['requires_manual_start'])
+            self.assertEqual((base/'previous').resolve(),old.resolve())
+            self.assertFalse(any('start' in c.args[0] or 'enable' in c.args[0] for c in command.call_args_list))
+
+    def test_manual_mode_removes_only_own_boot_links_and_preserves_unit(self):
+        import install,station
+        with tempfile.TemporaryDirectory() as directory:
+            base=Path(directory);release=base/'releases/new';release.mkdir(parents=True)
+            (release/'web.service').write_text('manual unit');(base/'current').symlink_to(release)
+            unitdir=base/'units';(unitdir/'multi-user.target.wants').mkdir(parents=True)
+            unit=unitdir/'duck-observer.service';unit.symlink_to(base/'current/web.service')
+            boot=unitdir/'multi-user.target.wants/duck-observer.service';boot.symlink_to(unit)
+            other=unitdir/'multi-user.target.wants/robotd.service';other.symlink_to('/missing/original')
+            with patch.object(install,'BASE',base),patch.object(install,'ensure_owned_units'),patch.object(install,'log'),patch.object(station,'UNIT_DIR',unitdir):station.enforce_manual()
+            self.assertFalse(boot.is_symlink());self.assertTrue(unit.is_symlink());self.assertTrue(other.is_symlink())
+            boot.symlink_to('/foreign/service')
+            with patch.object(install,'BASE',base),patch.object(install,'ensure_owned_units'),patch.object(install,'log'),patch.object(station,'UNIT_DIR',unitdir):
+                with self.assertRaises(RuntimeError):station.enforce_manual()
+
+    def test_station_stop_calls_only_own_units_without_helper(self):
+        import install,station
+        inactive={n:{'ActiveState':'inactive','MainPID':'0'} for n in install.UNITS}
+        with patch.object(install.os,'geteuid',return_value=0),patch.object(install,'ensure_owned_units'),patch.object(install,'snapshot',return_value={}),patch.object(install,'log'),patch.object(station,'enforce_manual'),patch.object(station,'states',return_value=inactive),patch.object(station,'status',return_value={'units':inactive}),patch.object(install,'run') as command:
+            result=station.operate('stop')
+        self.assertTrue(result['protected_unchanged'])
+        command.assert_called_once_with(['systemctl','stop','duck-observer.service','duck-observer-helper.service'])
+
     def test_repeated_activation_preserves_previous_without_service_restart(self):
         import install
         with tempfile.TemporaryDirectory() as directory:

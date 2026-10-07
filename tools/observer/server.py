@@ -78,14 +78,14 @@ class LocalServer(socketserver.ThreadingUnixStreamServer):
     daemon_threads=True
 
 class EventFrames:
-    """Share one 10Hz status frame across pages, independently of 50Hz UART IO.
+    """Share one 5Hz status frame across pages, independently of UART IO.
 
     The Zero3W has limited CPU: per-page deep copies, latency sorting and JSON
     encoding otherwise compete with IMU reads. Never replace sample timestamps
     with this cache time; browsers still age the original hardware samples.
     Errors are propagated, so a cached frame cannot conceal a helper outage.
     """
-    def __init__(self, provider, interval=.1):
+    def __init__(self, provider, interval=.2):
         self.provider=provider; self.interval=interval
         self.lock=threading.Lock(); self.stamp=0.; self.payload=None
 
@@ -127,7 +127,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Cache-Control','no-store'); self.send_header('Connection','close'); self.end_headers()
                 while True:
                     self.wfile.write(self.server.event_frames.get())
-                    self.wfile.flush(); time.sleep(.1)
+                    self.wfile.flush(); time.sleep(.2)
             if path=='/api/frame':
                 # Fixed local URL reuses mediad's rotated PNG; no new V4L2 owner.
                 with urlopen('http://127.0.0.1:8080/frame',timeout=4) as r:

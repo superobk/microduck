@@ -38,6 +38,7 @@ def package(version,destination):
         shutil.copy2(HERE.parents[1]/'LICENSE',stage/'LICENSE')
         metadata={'version':version,'revision':revision,'base':'a9ec4b2079ef8ee7904014089c885bb07d57d63c',
             'port':8766,'asset_sha256':hashlib.sha256((stage/'static/duck.bin').read_bytes()).hexdigest(),
+            'startup':'manual','default_bus_hz':20,'diagnostic_exempt_ids':[14],
             'servo_writes':False,'controller_lifecycle':False,'sound_seed':114,'sound_generator':'sounds render chirp --seed 114'}
         (stage/'VERSION.json').write_text(json.dumps(metadata,indent=2)+'\n')
         files={str(p.relative_to(stage)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(stage.rglob('*')) if p.is_file()}
@@ -49,7 +50,8 @@ def package(version,destination):
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('action',choices=['package','install','cli','export-audit']);p.add_argument('--target')
-    p.add_argument('--version',default='');p.add_argument('--audit-root',type=Path,required=True);a,extra=p.parse_known_args();a.args=extra
+    p.add_argument('--version',default='');p.add_argument('--tool-version',default='');p.add_argument('--audit-root',type=Path,required=True);a,extra=p.parse_known_args();a.args=extra
+    if a.tool_version and (a.action!='cli' or not re.fullmatch(r'[A-Za-z0-9._-]{1,80}',a.tool_version)):p.error('tool-version仅用于指定已安装CLI版本')
     if extra and a.action!='cli':p.error('不允许额外参数')
     archive=a.audit_root.parent/'artifacts';archive.mkdir(exist_ok=True)
     if a.action in ['package','install']:
@@ -78,11 +80,14 @@ def main():
         data=(HERE/'install.py').read_bytes();digest=hashlib.sha256(data).hexdigest()
         scripts=a.audit_root.parent/'scripts'/digest;scripts.mkdir(exist_ok=True);shutil.copy2(HERE/'install.py',scripts/'install.py')
         loader='import base64,sys;sys.argv='+repr(['install.py','--bundle',remote,'--sha256',meta['sha256'],'--version',a.version])+";exec(compile(base64.b64decode("+repr(base64.b64encode(data).decode())+"),'audited-observer-install.py','exec'))"
-        code=run(['ssh',*options,a.target,shlex.join(['python3','-c',loader])],a.audit_root,'安装独立门户；备份原状态，保持原服务和文件','只启门户自有服务；独立UART默认关闭；保留失败和恢复路径')
+        code=run(['ssh',*options,a.target,shlex.join(['python3','-c',loader])],a.audit_root,'安装独立门户文件；备份原状态，保持原服务和文件','安装不启动检测站；需明确station start；保留失败和恢复路径')
     elif a.action=='cli':
         arguments=a.args[1:] if a.args[:1]==['--'] else a.args
         if not arguments: p.error('需要observerctl参数')
-        remote=shlex.join(['python3','/opt/robot/local/duck-observer/current/observerctl',*arguments])
+        # Keep the manual lifecycle tool available after rolling back to an old
+        # release whose CLI would otherwise start services during activation.
+        entry='/opt/robot/local/duck-observer/'+('releases/'+a.tool_version if a.tool_version else 'current')+'/observerctl'
+        remote=shlex.join(['python3',entry,*arguments])
         code=run(['ssh',*options,a.target,remote],a.audit_root,'通过审计运行observerctl '+shlex.join(arguments),'持续观测不受命令等待时限影响；控制器不在操作白名单')
     else:
         local=a.audit_root.parent/'board-audit';local.mkdir(exist_ok=True)
