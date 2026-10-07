@@ -145,6 +145,8 @@ class Engine:
         # Restore UART intent only within the same boot. A board reboot starts passive.
         self.observing = wanted.get('observing', True) if wanted.get('boot') == self.boot else True
         self.bus_requested = wanted.get('bus_requested', False) if wanted.get('boot') == self.boot else False
+        self.bus_fault=wanted.get('bus_fault')
+        if self.bus_fault:self.bus_requested=False  # upgrades must not rearm a latched fault
         self.recording = wanted.get('recording', False) if wanted.get('boot') == self.boot else False
         self.record_file = None; self.record_hour = None; self.record_cap = 2*1024**3
         self.record_bytes = sum(p.stat().st_size for p in (self.root/'records').glob('*.gz'))
@@ -179,6 +181,13 @@ class Engine:
 
     def save_audio(self):
         atomic_json(self.root/'audio-result.json',{k:v for k,v in self.state['audio'].items() if k not in ['pcm_owners']})
+
+    def save_desired(self):
+        # Save actual state, including fault/capacity stops, rather than restoring
+        # the last click after an upgrade. A fault requires explicit observe-on.
+        with self.lock:
+            atomic_json(self.root/'desired.json',{'boot':self.boot,'observing':self.observing,
+                'bus_requested':self.bus_requested,'recording':self.recording,'bus_fault':self.bus_fault})
 
     def journal(self, kind, data):
         row = {'utc': utc(), 'id': uuid.uuid4().hex, 'kind': kind, **data}
@@ -223,6 +232,7 @@ class Engine:
         self.shutdown.set(); self.stop_audio()
         for t in self.threads: t.join(timeout=4)
         if self.record_file: self.record_file.close(); self.record_file = None
+        self.save_desired()
         self.journal('shutdown', {'bus_requested': self.bus_requested})
 
     def snapshot(self):
@@ -383,7 +393,7 @@ class Engine:
                     self.bus_rescan.clear()
                 if not wanted:
                     if port: port.close(); port = None
-                    self.state['bus_state'] = '服务订阅' if not self.controllers_stopped() else '未开启独立总线'
+                    self.state['bus_state'] = ('故障锁止：'+self.bus_fault+'；需手动开启') if self.bus_fault else '服务订阅' if not self.controllers_stopped() else '未开启独立总线'
                     self.shutdown.wait(.1); continue
                 if self.owner_error:raise RuntimeError('UART所有权检查失败: '+self.owner_error)
                 if self.owner_pids:raise RuntimeError('UART由其他进程持有: '+str(self.owner_pids))
@@ -455,7 +465,13 @@ class Engine:
                 # Ownership/identity/torque errors still close and require rearm.
                 if not recoverable:
                     if port:port.close();port=None
-                    self.bus_requested = False; self.state['bus_state'] = '需手动重新开启'
+                    self.bus_requested = False;self.bus_fault=str(exc);self.state['bus_state'] = '需手动重新开启'
+                    try:
+                        self.save_desired()
+                        self.journal('bus_latched',{'reason':self.bus_fault,'manual_rearm_required':True})
+                    except OSError as persistence:
+                        self.state['record_error']='无法保存故障锁止：'+str(persistence)
+                    except RuntimeError:pass  # journal already exposes audit_error; UART stays closed
                 self.shutdown.wait(.02 if recoverable else .5)
         if port: port.close()
 
@@ -550,10 +566,9 @@ class Engine:
             if set(args)!={'enabled'} or not isinstance(args['enabled'],bool): raise ValueError('enabled必须为布尔')
             if action=='observe':
                 self.observing=args['enabled']; self.bus_requested=args['enabled']
-                if args['enabled']:self.bus_rescan.set()
+                if args['enabled']:self.bus_fault=None;self.bus_rescan.set()
             else: self.recording=args['enabled']
-            atomic_json(self.root/'desired.json', {'boot':self.boot, 'observing':self.observing,
-                'bus_requested':self.bus_requested,'recording':self.recording})
+            self.save_desired()
             return {'observing':self.observing,'bus_requested':self.bus_requested,'recording':self.recording}
         if action=='service':
             if set(args)!={'unit','verb'}: raise ValueError('服务参数不允许')

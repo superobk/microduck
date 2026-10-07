@@ -252,6 +252,18 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(self.engine.bus_requested);self.assertEqual(port.sync.call_count,3)
         self.assertEqual(opener.call_count,1);port.close.assert_called_once()
         self.assertEqual(self.engine.state['servo']['errors'],3)
+        restored=Engine(self.tmp.name,config='/nonexistent',offline=True)
+        self.assertFalse(restored.bus_requested);self.assertEqual(restored.bus_fault,'missing response')
+        restored.perform('b'*32,'observe',{'enabled':True})
+        self.assertTrue(restored.bus_requested);self.assertIsNone(restored.bus_fault)
+        self.assertIsNone(json.loads((self.engine.root/'desired.json').read_text())['bus_fault'])
+
+    def test_close_preserves_actual_stopped_recording_instead_of_old_click(self):
+        self.engine.perform('a'*32,'record',{'enabled':True})
+        self.engine.recording=False  # e.g. quota reached after the user's click
+        self.engine.close()
+        restored=Engine(self.tmp.name,config='/nonexistent',offline=True)
+        self.assertFalse(restored.recording)
 
     def test_unknown_stale_or_inactive_controller_is_not_running(self):
         self.assertFalse(self.engine.controller_running())
