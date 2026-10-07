@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Local CLI: exactly the same audited operations as the web portal, no shell proxy."""
+import argparse
+import json
+import time
+from server import request_local
+
+def main():
+    p=argparse.ArgumentParser(); p.add_argument('--socket',default='/run/duck-observer/helper.sock')
+    sub=p.add_subparsers(dest='command',required=True)
+    q=sub.add_parser('status');q.add_argument('--brief',action='store_true')
+    sub.add_parser('report'); sub.add_parser('export'); sub.add_parser('fast-test')
+    q=sub.add_parser('acceptance');q.add_argument('--duration',type=int,default=1800);q.add_argument('--label',default='first-30min')
+    for name in ['observe','record']:
+        q=sub.add_parser(name); q.add_argument('state',choices=['on','off'])
+    q=sub.add_parser('service'); q.add_argument('unit',choices=['tofd','mediad']); q.add_argument('verb',choices=['start','stop','restart'])
+    q=sub.add_parser('restore'); q.add_argument('--transaction',required=True)
+    q=sub.add_parser('audio'); q.add_argument('verb',choices=['test','stop','heard','not-heard']); q.add_argument('--level',type=float,default=.1)
+    q=sub.add_parser('calibrate'); q.add_argument('mode',choices=['mount','bias','yaw','reference','undo']); q.add_argument('--mount',nargs=4,type=float)
+    q=sub.add_parser('release'); q.add_argument('verb',choices=['activate','rollback','uninstall']); q.add_argument('--previous',action='store_true'); q.add_argument('--version')
+    a=p.parse_args()
+    if a.command=='acceptance':
+        from acceptance import run
+        run(a.duration,a.label,a.socket);return
+    if a.command in ['status','report']:
+        result=request_local(a.socket,a.command)
+        if a.command=='status' and a.brief:
+            from acceptance import brief
+            result=brief(result)
+        print(json.dumps(result,ensure_ascii=False,indent=2)); return
+    if a.command=='release':
+        from install import switch_release,uninstall
+        print(json.dumps(uninstall() if a.verb=='uninstall' else switch_release(a.verb,a.version,a.previous),ensure_ascii=False,indent=2)); return
+    action=a.command; args={}
+    if action in ['observe','record']: args={'enabled':a.state=='on'}
+    elif action=='service': args={'unit':a.unit,'verb':a.verb}
+    elif action=='restore': args={'transaction':a.transaction}
+    elif action=='audio':
+        action={'test':'audio','stop':'audio_stop','heard':'audio_heard','not-heard':'audio_heard'}[a.verb]
+        args={'level':a.level} if a.verb=='test' else {'heard':a.verb=='heard'} if 'heard' in a.verb else {}
+    elif action=='calibrate':
+        args={'mode':a.mode}
+        if a.mount: args['mount']=a.mount
+    elif action=='fast-test': action='fast_test'
+    job=request_local(a.socket,'action',{'action':action,'params':args})
+    deadline=time.monotonic()+60
+    while time.monotonic()<deadline:
+        row=request_local(a.socket,'job',{'id':job['id']})
+        if row['status'] not in ['排队','执行中']:
+            print(json.dumps(row,ensure_ascii=False,indent=2))
+            if row['status']=='失败': raise SystemExit(1)
+            return
+        time.sleep(.2)
+    raise SystemExit('操作仍在执行，请按任务ID查询；没有停止持续观测')
+
+if __name__=='__main__': main()
