@@ -80,7 +80,10 @@ def serial_owners(port):
         try:
             for fd in (proc/'fd').iterdir():
                 try:
-                    if os.path.realpath(fd) == target: owners.add(int(proc.name))
+                    # proc fd links already name the opened device. Re-resolving
+                    # every directory for every FD consumed the 20ms budget on
+                    # Zero3W; readlink retains the actual-owner check cheaply.
+                    if os.readlink(fd) == target: owners.add(int(proc.name))
                 except OSError: pass
         except OSError: pass
     return sorted(owners)
