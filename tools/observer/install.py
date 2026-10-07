@@ -94,7 +94,13 @@ def wait_healthy():
     from server import request_local
     deadline=time.monotonic()+12
     while time.monotonic()<deadline:
-        try: return request_local('/run/duck-observer/helper.sock','status')
+        try:
+            state=request_local('/run/duck-observer/helper.sock','status')
+            from urllib.request import build_opener,ProxyHandler
+            with build_opener(ProxyHandler({})).open('http://127.0.0.1:8766/api/status',timeout=2) as r:
+                web=json.load(r)
+            if web['version']!=state['version']:raise RuntimeError('Web与辅助器版本不同')
+            return state
         except (OSError,RuntimeError): time.sleep(.2)
     raise RuntimeError('门户辅助器未在12秒内响应；恢复自有版本，不启动控制器')
 
@@ -144,6 +150,11 @@ def install(bundle,sha,version):
         # Compile cache is transient, not part of the immutable release identity.
         for p in stage.rglob('__pycache__'): shutil.rmtree(p)
         os.rename(stage,dest)
+        # TemporaryDirectory is 0700. After rename the immutable release must be
+        # readable/traversable by the deliberately unprivileged web account.
+        os.chmod(dest,0o755)
+        for p in dest.rglob('*'):
+            os.chmod(p,0o755 if p.is_dir() or p.name=='observerctl' else 0o644)
     DATA.mkdir(parents=True,exist_ok=True)
     import pwd,grp
     try: account=pwd.getpwnam('duck-observer')

@@ -52,6 +52,12 @@ def read_request(ident, address, length):
         raise ValueError('IMU只使用已核验的12字节契约')
     return encode(ident, 2, struct.pack('<HH', address, length))
 
+def identity_request(ident):
+    # Protocol-2 Ping returns model(2) + firmware(1). EEPROM byte 2 is model
+    # information, not firmware; use the same identity contract as the old probe.
+    if ident not in BUS_IDS: raise ValueError('只允许真实器件身份查询')
+    return encode(ident,1)
+
 def sync_request(fast=False):
     return encode(254, 0x8a if fast else 0x82, struct.pack('<HH', 124, 12) + bytes(BUS_IDS))
 
@@ -179,6 +185,11 @@ class ReadOnlyPort:
         _, status, data = self._exchange(read_request(ident, address, length), [ident], timeout=.05)[0]
         if status & 0x7f or len(data) != length: raise ValueError('读取状态/长度错误')
         return data, status
+
+    def identity(self,ident):
+        _,status,data=self._exchange(identity_request(ident),[ident],timeout=.1)[0]
+        if status & 0x7f or len(data)!=3:raise ValueError('Ping身份回包无效')
+        return data,status
 
     def sync(self, fast=False):
         return self._exchange(sync_request(fast), BUS_IDS, fast, .2 if fast else .025)

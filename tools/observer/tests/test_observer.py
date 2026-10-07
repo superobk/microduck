@@ -42,6 +42,10 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaises(ValueError):p.read_request(*args)
         _,instruction,params=p.decode(p.sync_request());self.assertEqual(instruction,0x82)
         self.assertEqual(list(params[4:]),p.BUS_IDS)
+        for sid in p.BUS_IDS:
+            ident,instruction,body=p.decode(p.identity_request(sid))
+            self.assertEqual((ident,instruction,body),(sid,1,b''))
+        with self.assertRaises(ValueError):p.identity_request(30)
 
     def test_servo_units_and_right_slots(self):
         data=p.servo_decode(10,struct.pack('<hhii',0,-42,60,2048),128)

@@ -307,7 +307,8 @@ class Engine:
                     port = ReadOnlyPort(self.port_path)
                     metadata = {}
                     for ident in BUS_IDS:
-                        raw, _ = port.read(ident, 0, 3); model = int.from_bytes(raw[:2], 'little')
+                        if not self.controllers_stopped() or serial_owners(self.port_path):raise RuntimeError('身份查询期间UART所有权变化')
+                        raw, _ = port.identity(ident); model = int.from_bytes(raw[:2], 'little')
                         if ident == 200:
                             if (model, raw[2]) != (1030, 3): raise RuntimeError(f'IMU身份未核验: {model}/FW{raw[2]}')
                             self.state['imu']['identity'] = {'id':200, 'model':model, 'firmware':raw[2]}
@@ -356,7 +357,10 @@ class Engine:
     def stream(self, path, method, component):
         with socket.socket(socket.AF_UNIX) as s:
             s.settimeout(2); s.connect(path); f = s.makefile('rwb')
-            for ident, call, args in [(1,'hello',{'api_version':37}), (2,method,{'hz':50} if component=='imu' else {})]:
+            # tofd's documented stream contract has no hello route. Controllers
+            # do negotiate; log their skew but never refuse solely on a version.
+            calls=([(1,'hello',{'api_version':37})] if component=='imu' else [])+[(2,method,{'hz':50} if component=='imu' else {})]
+            for ident, call, args in calls:
                 f.write((json.dumps({'jsonrpc':'2.0','id':ident,'method':call,'params':args})+'\n').encode()); f.flush()
             while not self.shutdown.is_set() and self.observing:
                 if component == 'imu' and self.controllers_stopped(): return
@@ -588,8 +592,7 @@ class Engine:
                     if unit=='tofd' and not self.observing:
                         with socket.socket(socket.AF_UNIX) as s:
                             s.settimeout(2);s.connect('/run/tofd/tof.sock');f=s.makefile('rwb')
-                            for msg in [{'jsonrpc':'2.0','id':1,'method':'hello','params':{'api_version':37}},
-                                        {'jsonrpc':'2.0','id':2,'method':'tof.stream','params':{}}]:
+                            for msg in [{'jsonrpc':'2.0','id':2,'method':'tof.stream','params':{}}]:
                                 f.write((json.dumps(msg)+'\n').encode())
                             f.flush()
                             for _ in range(8):
