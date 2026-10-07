@@ -23,11 +23,19 @@ def brief(state):
         'devices':state['servo']['devices'],
         'services':{k:{x:r.get(x) for x in ['ActiveState','MainPID']} for k,r in state['services'].items()}}
 
+def continuity(initial,current):
+    # Wall clocks may correct after a board reboot. Boot identity and monotonic
+    # helper uptime prevent stitching two sessions/releases into a claimed pass.
+    if initial.get('boot')!=current.get('boot'):return '板端已重启，连续窗口中断'
+    if initial.get('version')!=current.get('version'):return '门户版本已改变，连续窗口中断'
+    if current['uptime_s']<initial['uptime_s']:return '辅助器已重启，连续窗口中断'
+    return None
+
 def run(duration=1800,label='first-30min',sock='/run/duck-observer/helper.sock'):
     if not 60<=duration<=86400 or not re.fullmatch(r'[A-Za-z0-9_-]{1,60}',label):raise ValueError('验收窗口60–86400秒，标签只能是字母、数字、横线')
     root=DATA/'acceptance'/label;root.mkdir(parents=True,exist_ok=False)
     before=snapshot();atomic_json(root/'before.json',before)
-    start=time.monotonic();rows=[];initial=None;first_done=False;tick=0
+    start=time.monotonic();rows=[];initial=None;first_done=False;tick=0;interruption=None
     columns=['utc','elapsed_s','version','uptime_s','servo_hz','imu_hz','tof_hz','camera_fps','p99_ms','servo_errors','imu_errors','tof_errors','rss_kib','cpu_percent','disk_free','record_drops','action_queue','record_queue','servo_status','imu_status','tof_status','camera_status']
     with (root/'samples.csv').open('w') as f:
         writer=csv.DictWriter(f,fieldnames=columns);writer.writeheader()
@@ -44,6 +52,8 @@ def run(duration=1800,label='first-30min',sock='/run/duck-observer/helper.sock')
                     'action_queue':state['queue_sizes']['action'],'record_queue':state['queue_sizes']['record'],
                     **{k+'_status':state[k]['status'] for k in ['servo','imu','tof','camera']}}
                 writer.writerow(row);f.flush();rows.append(row)
+                interruption=continuity(initial,state)
+                if interruption:break
             except Exception as exc:
                 with (root/'errors.jsonl').open('a') as err:err.write(json.dumps({'utc':utc(),'error':str(exc)})+'\n')
             if elapsed>=60 and not first_done:
@@ -52,6 +62,8 @@ def run(duration=1800,label='first-30min',sock='/run/duck-observer/helper.sock')
             tick+=1;time.sleep(max(.01,start+tick-time.monotonic()))
     final=request_local(sock,'status');after=snapshot();atomic_json(root/'after.json',after)
     result=evaluate(rows,initial,final,duration);result.update(protected_unchanged=before==after,ended_utc=utc(),observer_continues=final['observing'],evidence=str(root))
+    interruption=interruption or continuity(initial,final)
+    if interruption:result.update(interruption=interruption,ordinary_bus_pass=False,imu_only_pass=False,same_helper_process=False)
     atomic_json(root/'final.json',result);atomic_json(root/'last.json',brief(final))
     print(json.dumps(result,ensure_ascii=False,indent=2),flush=True);return result
 

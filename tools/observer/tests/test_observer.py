@@ -46,7 +46,11 @@ class ProtocolTests(unittest.TestCase):
             ident,instruction,body=p.decode(p.identity_request(sid))
             self.assertEqual((ident,instruction,body),(sid,1,b''))
         with self.assertRaises(ValueError):p.identity_request(30)
-        _,_,data=p.decode(p.sync_request(ids=[10,200]));self.assertEqual(list(data[4:]),[10,200])
+        # This literal is the original Rust controller's IMU-first wire contract,
+        # rather than deriving the expected result from the implementation list.
+        _,_,data=p.decode(p.sync_request());self.assertEqual(list(data[4:]),[200,20,21,22,23,24,34,10,11,12,13,14])
+        _,_,data=p.decode(p.sync_request(ids=[200,10]));self.assertEqual(list(data[4:]),[200,10])
+        with self.assertRaises(ValueError):p.sync_request(ids=[10,200])
         for ids in [[],[30],[10,10],[1]]:
             with self.assertRaises(ValueError):p.sync_request(ids=ids)
         with self.assertRaises(ValueError):p.sync_request(True,[200])
@@ -275,6 +279,14 @@ class EventFrameTests(unittest.TestCase):
         provider=Mock(side_effect=[{'imu':{'status':'实时'}},RuntimeError('helper down')])
         frames=EventFrames(provider,interval=.01);frames.get();time.sleep(.02)
         with self.assertRaisesRegex(RuntimeError,'helper down'):frames.get()
+
+class AcceptanceTests(unittest.TestCase):
+    def test_version_reboot_and_helper_restart_do_not_form_continuous_pass(self):
+        from acceptance import continuity
+        first={'boot':'old','version':{'version':'r7'},'uptime_s':100}
+        self.assertIsNone(continuity(first,{**first,'uptime_s':200}))
+        for change in [{'boot':'new'},{'version':{'version':'r8'}},{'uptime_s':1}]:
+            self.assertIsNotNone(continuity(first,{**first,**change}))
 
 class ArchiveTests(unittest.TestCase):
     def test_traversal_and_links_rejected(self):

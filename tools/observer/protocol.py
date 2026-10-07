@@ -13,7 +13,11 @@ import termios
 import time
 
 SERVO_IDS = [20, 21, 22, 23, 24, 34, 10, 11, 12, 13, 14]
-BUS_IDS = SERVO_IDS + [200]
+# Match the deployed Rust DynamixelIo::open: the custom IMU board is first,
+# followed by real motors. Wire response order is independent of logical slots.
+# Putting IMU last can collide with motor replies on this mixed-device chain;
+# keep strict CRC/order checks instead of hiding those failures in the parser.
+BUS_IDS = [200] + SERVO_IDS
 SLOTS = {ident: i for i, ident in enumerate([20, 21, 22, 23, 24, 30, 31, 32, 33, 34, 10, 11, 12, 13, 14])}
 HOME = [0., -.0873, -.4579, -.0049, .4530, .3491, .3491, 0., 0., 0., 0., .0873, .4579, .0049, -.4530]
 HEADER = b'\xff\xff\xfd\x00'
@@ -62,6 +66,7 @@ def sync_request(fast=False,ids=None):
     ids=BUS_IDS if ids is None else ids
     if not ids or len(ids)!=len(set(ids)) or any(i not in BUS_IDS for i in ids) or (fast and ids!=BUS_IDS):
         raise ValueError('只允许已核验真实ID子集；Fast必须全链')
+    if 200 in ids and ids[0]!=200:raise ValueError('IMU必须按原控制器契约位于首位')
     return encode(254, 0x8a if fast else 0x82, struct.pack('<HH', 124, 12) + bytes(ids))
 
 def parse_fast(packet):
@@ -181,7 +186,7 @@ class ReadOnlyPort:
                 if fast: return parse_fast(packet)
                 ident, kind, data = decode(packet)
                 if kind != 0x55 or not data or ident != ids[len(rows)]:
-                    raise ValueError('响应ID/顺序错误')
+                    raise ValueError(f'响应ID/顺序错误: 已收{[r[0] for r in rows]}，预期{ids[len(rows)]}，实际{ident}')
                 rows.append((ident, data[0], data[1:]))
                 if len(rows) == len(ids): return rows
         raise TimeoutError('总线应答不完整: ' + str([r[0] for r in rows]))
