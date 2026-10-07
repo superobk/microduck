@@ -594,7 +594,10 @@ class Engine:
                     if not self.controllers_stopped() or serial_owners(self.port_path): raise RuntimeError('串口所有权变化')
                     begin=time.monotonic(); rows=port.sync(True)
                     if any(st&0x7f or len(data)!=12 for _,st,data in rows): raise ValueError('Fast状态/长度错误')
-                    imu_decode(rows[-1][2]); samples.append((time.monotonic()-begin)*1000)
+                    # Select by device identity: the baseline puts IMU200 first,
+                    # so the final response is a right-leg servo, not the IMU.
+                    imu_decode(next(data for sid,_,data in rows if sid==200))
+                    samples.append((time.monotonic()-begin)*1000)
                 result={'pass':True,'count':20,'latencies_ms':samples,'ids':BUS_IDS}
             except Exception as exc: result={'pass':False,'error':str(exc)}
             finally: port.close()

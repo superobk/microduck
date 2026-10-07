@@ -263,6 +263,17 @@ class EngineTests(unittest.TestCase):
         self.engine.state['service_checked_at']=time.monotonic()-3
         self.assertFalse(self.engine.controller_running())
 
+    def test_fast_diagnostic_decodes_id200_instead_of_last_servo(self):
+        from unittest.mock import Mock
+        raw=struct.pack('<hhh',0,0,0)+struct.pack('<eee',0,math.sqrt(.5),0)
+        rows=[(200,0,raw)]+[(sid,128,bytes(12)) for sid in p.SERVO_IDS]
+        port=Mock();port.read.return_value=(bytes(7),0);port.sync.return_value=rows
+        self.engine.offline=False;self.engine.bus_requested=False
+        with patch('runtime.ReadOnlyPort',return_value=port),patch('runtime.serial_owners',return_value=[]),patch.object(self.engine,'controllers_stopped',return_value=True):
+            result=self.engine.perform('a'*32,'fast_test',{})
+        self.assertTrue(result['pass']);self.assertEqual(result['count'],20)
+        port.close.assert_called_once()
+
 class HTTPTests(unittest.TestCase):
     def setUp(self):
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
