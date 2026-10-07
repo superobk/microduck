@@ -137,6 +137,17 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):self.engine.calibrate('a'*32,{'mode':'yaw'})
         self.assertFalse((self.engine.root/'profile.json').exists())
 
+    def test_calibration_20hz_accepts_recent_samples_without_weakening_50hz(self):
+        value=p.imu_decode(struct.pack('<hhh',0,0,0)+struct.pack('<eee',0,math.sqrt(.5),0))
+        for _ in range(18):self.engine.update('imu',value)
+        self.engine.bus_hz=50
+        with self.assertRaises(RuntimeError):self.engine.calibrate('a'*32,{'mode':'reference'})
+        self.engine.bus_hz=20
+        self.engine.calibrate('b'*32,{'mode':'reference'})
+        self.assertEqual(self.engine.profile['revision'],'b'*32)
+        self.engine.state['imu']['received']=time.monotonic()-2
+        with self.assertRaises(RuntimeError):self.engine.calibrate('c'*32,{'mode':'yaw'})
+
     def test_service_and_rpc_allowlist(self):
         for unit in ['robotd','updaterd','zero3w-11servo-candidate','mediad.service; reboot']:
             with self.assertRaises(ValueError):self.engine.change_service('a'*32,unit,'start')

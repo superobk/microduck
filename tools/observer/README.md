@@ -33,7 +33,7 @@ IMU ID200 使用已核验的型号1030/FW3、寄存器124/12契约，与 `duck-c
 
 部署到板端后：`python3 /opt/robot/local/duck-observer/current/observerctl station start`启动页面；`observe on --hz 20`开启低开销采集；`station stop`停止两个自有进程、采集和自有播放器。停止后没有检测站后台进程，ToF/媒体原服务保持既有状态。临时文件与持久校正/审计分开。
 
-回退旧版本时固定使用新的工具，例如`deploy.py cli --tool-version observer-20261007-r13 ... -- release rollback --previous`，避免旧安装器恢复自动启动行为。旧版本只有文件回退，不自动恢复观测。独立目录可单独打包/停用，原程序路径和共享IPC/TOML/ONNX不改变。
+回退旧版本时固定使用新的工具，例如`deploy.py cli --tool-version observer-20261007-r14 ... -- release rollback --previous`，避免旧安装器恢复自动启动行为。旧版本只有文件回退，不自动恢复观测。独立目录可单独打包/停用，原程序路径和共享IPC/TOML/ONNX不改变。
 
 服务事务恢复检测开机身份、PID、unit 指纹和状态变化，不覆盖后来的人工修改。mediad 的直接和间接依赖必须验证有效停止条件，不能借启动相机拉起控制器。所有维护动作先 fsync 审计，失败则拒绝执行。
 

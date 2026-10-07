@@ -773,9 +773,13 @@ class Engine:
             profile.update(mount=qnorm(mount),reference=[1.,0.,0.,0.],bias=[0.,0.,0.])
         else:
             imu=self.snapshot()['imu']
-            if imu['status']!='实时' or not imu.get('trunk_quat') or len(self.samples)<25: raise RuntimeError('需要至少25个新鲜有效IMU样本')
+            # At the default 20Hz, a fixed 25 samples/second gate can never
+            # succeed. Require 15 recent samples for diagnostics; retain the
+            # original 25 at 50Hz, the 1s freshness and all movement guards.
+            minimum=15 if self.bus_hz==20 else 25
+            if imu['status']!='实时' or not imu.get('trunk_quat') or len(self.samples)<minimum: raise RuntimeError(f'需要至少{minimum}个新鲜有效IMU样本')
             recent=[r for t,r in self.samples if t>=time.monotonic()-1]
-            if len(recent)<25: raise RuntimeError('近1秒有效样本不足25')
+            if len(recent)<minimum: raise RuntimeError(f'近1秒有效样本不足{minimum}')
             anchor=recent[0]['trunk_quat']
             if any(math.sqrt(sum(v*v for v in r['gyro']))>math.radians(5) or
                    math.degrees(2*math.acos(min(1.,abs(sum(a*b for a,b in zip(anchor,r['trunk_quat']))))))>1 for r in recent):
