@@ -121,25 +121,61 @@ pub struct DynamixelIo {
     /// the same sample, which means the policy is being fed dead orientation data — a
     /// failure that is invisible unless someone counts it. Known to happen.
     stale_imu: StaleImuTracker,
+    imu_trace: Option<crate::imu_trace::Trace>,
 }
 
 impl DynamixelIo {
     /// Open the bus. `fast_sync_read` is `bus.fast_sync_read` from `robotd.toml` — see
     /// [`open_controller`] for what it costs to have wrong.
     pub fn open(port: &str, fast_sync_read: bool) -> Result<Self> {
+        let mut quality = crate::imu_quality::Config::default();
+        if let Ok(mode) = std::env::var("ROBOT_IMU_MODE") {
+            quality.mode = match mode.as_str() {
+                "shadow" => crate::imu_quality::Mode::Shadow,
+                "predict" => crate::imu_quality::Mode::Predict,
+                _ => {
+                    return Err(IoError::Bus(
+                        "ROBOT_IMU_MODE must be shadow or predict".into(),
+                    ));
+                }
+            };
+        }
+        if let Ok(value) = std::env::var("ROBOT_IMU_TOLERANCE_DEG") {
+            quality.tolerance_deg = value
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite() && *v > 0.0 && *v <= 45.0)
+                .ok_or_else(|| IoError::Bus("ROBOT_IMU_TOLERANCE_DEG must be in (0,45]".into()))?;
+        }
         let controller = open_controller(port, BAUD_RATE, fast_sync_read)?;
+        let imu_trace = std::env::var_os("ROBOT_IMU_TRACE_DIR")
+            .and_then(|directory| {
+                let path = std::path::PathBuf::from(directory).join(format!(
+                    "imu-{}.jsonl",
+                    duck_ipc_proto::clock::monotonic_ns()
+                ));
+                match crate::imu_trace::Trace::open(&path) {
+                    Ok(trace)=>{tracing::warn!(path=%path.display(),"IMU raw capture opened");Some(trace)}
+                    Err(error)=>{tracing::warn!(%error,path=%path.display(),"IMU trace unavailable; control unchanged");None}
+                }
+            });
 
         let mut ids = Vec::with_capacity(NUM_JOINTS + 1);
         ids.push(IMU_DXL_ID);
         ids.extend_from_slice(&JOINT_IDS);
 
+        let mut imu = SflpDecoder::default();
+        imu.configure_quality(quality);
+        tracing::warn!(mode=?quality.mode,tolerance_deg=quality.tolerance_deg,max_predict_ms=quality.max_predict_ns/1_000_000,
+            trace=imu_trace.is_some(),"IMU quality monitoring configured; prediction is experimental");
         Ok(Self {
             controller,
             port: port.to_owned(),
             ids,
             fast_sync_read,
-            imu: SflpDecoder::default(),
+            imu,
             stale_imu: StaleImuTracker::default(),
+            imu_trace,
         })
     }
 
@@ -147,7 +183,7 @@ impl DynamixelIo {
     /// for a `zero3`, [`SflpDecoder::BETA_MOUNT`] for a `beta`). Starts the decoder afresh, so
     /// call it right after [`Self::open`], before the first read.
     pub fn set_imu_mount(&mut self, mount: [f64; 4]) {
-        self.imu = SflpDecoder::new(mount);
+        self.imu.set_mount(mount);
     }
 
     /// Assert — and correct — the EEPROM registers the control loop depends on.
@@ -421,6 +457,12 @@ impl DynamixelIo {
             }
         }
         if failed.is_empty() {
+            if !on && self.imu.quality_faulted() {
+                self.imu.rearm_after_relax();
+                tracing::warn!(
+                    "IMU quality fault rearmed after torque off; awaiting fresh orientation"
+                );
+            }
             Ok(())
         } else {
             Err(IoError::Bus(failed.join("; ")))
@@ -505,6 +547,7 @@ pub fn replacement_target(missing: &[u8]) -> Option<u8> {
 
 impl RobotIo for DynamixelIo {
     fn read(&mut self) -> Result<Sensors> {
+        let read_start = duck_ipc_proto::clock::monotonic_ns();
         let blocks = self
             .controller
             .sync_read_raw_data(&self.ids, READ_ADDR, READ_LEN)
@@ -536,7 +579,22 @@ impl RobotIo for DynamixelIo {
                     "imu board has returned the same sample {run} reads running — orientation is frozen"
                 );
             }
-            sensors.imu = self.imu.decode(&raw);
+            let read_end = duck_ipc_proto::clock::monotonic_ns();
+            let (decoded, sample) = self.imu.decode_at(&raw, read_end);
+            if let Some(trace) = &self.imu_trace {
+                trace.record(crate::imu_trace::Record {
+                    schema_version: 1,
+                    host_read_start_ns: read_start,
+                    host_read_end_ns: read_end,
+                    raw,
+                    decoded: sample,
+                    dropped_records: 0,
+                });
+            }
+            if self.imu.quality_faulted() {
+                return Err(IoError::ImuQuality);
+            }
+            sensors.imu = decoded;
         } else {
             return Err(IoError::ShortRead {
                 what: "imu block",
