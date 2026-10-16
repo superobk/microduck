@@ -9,7 +9,7 @@
 //!
 //! | bytes | contents |
 //! |---|---|
-//! | 0..6  | gyro x/y/z, `i16` LE raw counts, ±500 dps |
+//! | 0..6  | gyro x/y/z, `i16` LE counts, candidate encoding 16.4 counts/dps |
 //! | 6..12 | SFLP quaternion x/y/z as IEEE half-precision; `w = √(1 − x² − y² − z²)` |
 //!
 //! The board's full diagnostic block is 20 bytes (it also carries raw accelerometer, a
@@ -44,8 +44,9 @@ impl Default for ImuData {
     }
 }
 
-/// ±500 dps at 17.5 mdps/LSB, in rad/s.
-const GYRO_RAD_PER_LSB: f64 = 0.0175 * std::f64::consts::PI / 180.0;
+/// Candidate wire contract: 16.4 counts per deg/s, converted to rad/s.
+/// Use only with that board encoding; this is not the native LSM6DSV16X sensitivity.
+const GYRO_RAD_PER_LSB: f64 = (1.0 / 16.4) * std::f64::consts::PI / 180.0;
 
 /// Decodes the board's block into [`ImuData`].
 ///
@@ -356,5 +357,48 @@ mod tests {
             (magnitude - expected).abs() < 1e-9,
             "expected |gyro| {expected}, got {magnitude}"
         );
+    }
+}
+
+#[cfg(test)]
+mod wire_contract_tests {
+    use super::*;
+
+    // Fixed physical references catch a wrong divisor, signed decoding or mount axis.
+    // Expected values deliberately do not use GYRO_RAD_PER_LSB.
+    #[test]
+    fn counts_1640_mean_100_dps_on_each_signed_axis() {
+        for axis in 0..3 {
+            for sign in [-1i16, 1] {
+                let mut d = SflpDecoder::default();
+                let mut block = [0u8; IMU_BLOCK_LEN];
+                block[2 * axis..2 * axis + 2].copy_from_slice(&(sign * 1640).to_le_bytes());
+                d.decode(&block);
+                d.decode(&block);
+                let out = d.decode(&block);
+                let mut expected = [0.0f64; 3];
+                let (target, direction) = [(2, -1.0), (1, 1.0), (0, 1.0)][axis];
+                expected[target] = direction * f64::from(sign) * 100.0;
+                for j in 0..3 {
+                    assert!((out.gyro[j].to_degrees() - expected[j]).abs() < 1e-10);
+                }
+            }
+        }
+    }
+
+    // Conversion stays in floating point, including the signed int16 endpoints.
+    #[test]
+    fn signed_endpoints_have_the_protocol_range() {
+        for (counts, expected_dps) in [
+            (32767i16, 1997.9878048780488f64),
+            (-32768i16, -1998.048780487805f64),
+        ] {
+            let mut d = SflpDecoder::new(SflpDecoder::BETA_MOUNT);
+            let mut block = [0u8; IMU_BLOCK_LEN];
+            block[0..2].copy_from_slice(&counts.to_le_bytes());
+            d.decode(&block);
+            d.decode(&block);
+            assert!((d.decode(&block).gyro[0].to_degrees() - expected_dps).abs() < 1e-10);
+        }
     }
 }
