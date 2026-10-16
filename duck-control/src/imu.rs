@@ -449,8 +449,8 @@ mod wire_contract_tests {
                 let mut expected = [0.0f64; 3];
                 let (target, direction) = [(2, -1.0), (1, 1.0), (0, 1.0)][axis];
                 expected[target] = direction * f64::from(sign) * 100.0;
-                for j in 0..3 {
-                    assert!((out.gyro[j].to_degrees() - expected[j]).abs() < 1e-10);
+                for (actual, expected) in out.gyro.iter().zip(expected) {
+                    assert!((actual.to_degrees() - expected).abs() < 1e-10);
                 }
             }
         }
