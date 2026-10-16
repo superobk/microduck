@@ -16,6 +16,7 @@
 //! sample counter and status flags). The control loop consumes only the first 12 so the
 //! read fits alongside the servos in one transaction.
 
+use crate::imu_quality::{Config, Mode, Monitor, Report, Status};
 use crate::model::NUM_JOINTS;
 
 /// Bytes of the v2 board's block consumed per tick.
@@ -65,6 +66,17 @@ pub struct SflpDecoder {
     quat_samples: u32,
     gyro_history: [[f64; 3]; 2],
     gravity_history: [[f64; 3]; 2],
+    monitor: Monitor,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct DecodedSample {
+    pub quality_mode: Mode,
+    pub gyro_unfiltered: [f64; 3],
+    pub measured_quat: Option<[f64; 4]>,
+    pub selected_quat: [f64; 4],
+    pub gravity_filtered: [f64; 3],
+    pub quality: Report,
 }
 
 impl Default for SflpDecoder {
@@ -95,6 +107,7 @@ impl SflpDecoder {
             quat_samples: 0,
             gyro_history: [[0.0; 3]; 2],
             gravity_history: [[0.0, 0.0, -1.0]; 2],
+            monitor: Monitor::new(Config::default()),
         }
     }
 
@@ -103,10 +116,40 @@ impl SflpDecoder {
     /// Until this is true the orientation is a default, not a measurement. Slice 2's fall
     /// detection must not run before it.
     pub fn ready(&self) -> bool {
-        self.quat_samples >= 25
+        self.quat_samples >= 25 && !self.monitor.faulted()
+    }
+
+    pub fn configure_quality(&mut self, config: Config) {
+        self.monitor = Monitor::new(config);
+    }
+
+    pub fn set_mount(&mut self, mount: [f64; 4]) {
+        let config = self.monitor.config;
+        *self = Self::new(mount);
+        self.configure_quality(config);
+    }
+
+    pub fn quality_faulted(&self) -> bool {
+        self.monitor.faulted()
+    }
+
+    /// A deliberate torque-off ends a failed episode. A good packet alone must not restart it.
+    pub fn rearm_after_relax(&mut self) {
+        self.monitor.reset();
+        self.quat_samples = 0;
+        self.gyro_history = [[0.0; 3]; 2];
+        self.gravity_history = [[0.0, 0.0, -1.0]; 2];
     }
 
     pub fn decode(&mut self, raw: &[u8; IMU_BLOCK_LEN]) -> ImuData {
+        self.decode_at(raw, duck_ipc_proto::clock::monotonic_ns()).0
+    }
+
+    pub fn decode_at(
+        &mut self,
+        raw: &[u8; IMU_BLOCK_LEN],
+        now_ns: u64,
+    ) -> (ImuData, DecodedSample) {
         let gyro_sensor = [
             i16::from_le_bytes([raw[0], raw[1]]) as f64 * GYRO_RAD_PER_LSB,
             i16::from_le_bytes([raw[2], raw[3]]) as f64 * GYRO_RAD_PER_LSB,
@@ -121,6 +164,7 @@ impl SflpDecoder {
             u16::from_le_bytes([raw[8], raw[9]]),
             u16::from_le_bytes([raw[10], raw[11]]),
         ];
+        let mut measured = None;
         if packed != [0, 0, 0] {
             let (x, y, z) = (half(packed[0]), half(packed[1]), half(packed[2]));
             let norm_sq = x * x + y * y + z * z;
@@ -137,9 +181,23 @@ impl SflpDecoder {
                 let q = mul([w, x, y, z], mount_inv);
                 let norm = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
                 if norm > 0.5 {
-                    self.last_quat = [q[0] / norm, q[1] / norm, q[2] / norm, q[3] / norm];
-                    self.quat_samples = self.quat_samples.saturating_add(1);
+                    measured = Some([q[0] / norm, q[1] / norm, q[2] / norm, q[3] / norm]);
                 }
+            }
+        }
+
+        let (predicted, quality) = self.monitor.observe(now_ns, measured, gyro);
+        let selected = if self.monitor.config.mode == Mode::Predict {
+            predicted
+        } else {
+            measured
+        };
+        if let Some(q) = selected {
+            self.last_quat = q;
+            if measured.is_some()
+                && (self.monitor.config.mode == Mode::Shadow || quality.status != Status::Predicted)
+            {
+                self.quat_samples = self.quat_samples.saturating_add(1);
             }
         }
 
@@ -156,9 +214,21 @@ impl SflpDecoder {
             gravity: median3_each(&self.gravity_history, gravity),
             quat: self.last_quat,
         };
-        self.gyro_history = [self.gyro_history[1], gyro];
-        self.gravity_history = [self.gravity_history[1], gravity];
-        out
+        if !self.quality_faulted() {
+            self.gyro_history = [self.gyro_history[1], gyro];
+            self.gravity_history = [self.gravity_history[1], gravity];
+        }
+        (
+            out,
+            DecodedSample {
+                quality_mode: self.monitor.config.mode,
+                gyro_unfiltered: gyro,
+                measured_quat: measured,
+                selected_quat: self.last_quat,
+                gravity_filtered: out.gravity,
+                quality,
+            },
+        )
     }
 }
 
@@ -187,7 +257,7 @@ fn half(bits: u16) -> f64 {
 }
 
 /// Hamilton product, scalar-first.
-fn mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+pub(crate) fn mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     let ([aw, ax, ay, az], [bw, bx, by, bz]) = (a, b);
     [
         aw * bw - ax * bx - ay * by - az * bz,
@@ -208,7 +278,7 @@ fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
 }
 
 /// `q⁻¹ · v · q` — world vector expressed in the body frame.
-fn rotate_inverse(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+pub(crate) fn rotate_inverse(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
     let (t, c) = cross_terms(q, v);
     [
         v[0] - q[0] * t[0] + c[0],
@@ -233,7 +303,7 @@ fn cross_terms(q: [f64; 4], v: [f64; 3]) -> ([f64; 3], [f64; 3]) {
 }
 
 /// Unit vector, falling back to "upright" rather than dividing by ~zero.
-fn normalise(v: [f64; 3]) -> [f64; 3] {
+pub(crate) fn normalise(v: [f64; 3]) -> [f64; 3] {
     let mag = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
     if mag > 0.1 {
         [v[0] / mag, v[1] / mag, v[2] / mag]

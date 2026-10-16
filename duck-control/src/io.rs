@@ -70,6 +70,8 @@ pub enum IoError {
     },
     #[error("simulated failure")]
     Simulated,
+    #[error("IMU quality fault latched; support the robot and relax before rearming")]
+    ImuQuality,
 }
 
 pub type Result<T> = std::result::Result<T, IoError>;

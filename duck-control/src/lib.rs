@@ -10,6 +10,8 @@
 pub mod bus;
 pub mod fall;
 pub mod imu;
+pub mod imu_quality;
+mod imu_trace;
 pub mod io;
 pub mod model;
 pub mod obs;
