@@ -318,8 +318,17 @@ def session(stage, long, run_name, expected_sha):
         error = repr(exc)
         print("停止：" + error, flush=True)
     finally:
-        # Seal BEFORE relax: relax intentionally resets the latch.
+        # Fix the evidence cutoff BEFORE relax resets the latch. Stop first; potentially
+        # large file reads/checksums must never delay an operator's stop request.
         window_end = window_end or time.monotonic_ns()
+        for stop_action in (lambda: rpc("robot.stop"), lambda: relax(out)):
+            try:
+                stop_action()
+            except Exception as exc:
+                error = str(exc)
+                complete = False
+                print("未能确认停止/relax。必须保持物理支撑；日志不算通过。", flush=True)
+        time.sleep(.1)  # Allow the trace writer to drain records preceding the fixed cutoff.
         full_rows = []
         for source in ([TRACE_FILE] if TRACE_FILE else []):
             with source.open() as stream:
@@ -338,13 +347,6 @@ def session(stage, long, run_name, expected_sha):
         with (out / "imu-payload.jsonl").open("w") as f:
             for row in sealed:
                 f.write(json.dumps(row) + "\n")
-        try:
-            rpc("robot.stop")
-            relax(out)
-        except Exception as exc:
-            error = str(exc)
-            complete = False
-            print("未能确认停止/relax。必须保持物理支撑；日志不算通过。", flush=True)
         if collector:
             collector.terminate()
             try:
