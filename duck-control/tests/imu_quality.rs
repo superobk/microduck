@@ -69,7 +69,13 @@ fn observed_small_half_burst_cannot_pollute_prediction_filter_or_readiness() {
         assert_eq!(sample.quat, good.quat);
         assert_eq!(sample.gravity, good.gravity);
     }
-    d.decode_at(&raw, 1 + 32 * 20_000_000);
+    let (_, detail) = d.decode_at(&raw, 1 + 32 * 20_000_000);
+    assert!(!detail.selected_valid);
+    assert!(!detail.control_ready);
+    assert_eq!(
+        detail.selected_quat, good.quat,
+        "history is retained but invalid"
+    );
     assert!(d.quality_faulted());
     assert!(!d.ready());
     raw[6..8].copy_from_slice(&0x3000u16.to_le_bytes());

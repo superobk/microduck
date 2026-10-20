@@ -12,6 +12,9 @@ pub(crate) struct Record {
     pub schema_version: u32,
     pub host_read_start_ns: u64,
     pub host_read_end_ns: u64,
+    /// Transport has accepted this ID/address payload; full wire packet is not captured.
+    pub device_id: u8,
+    pub register_address: u8,
     pub raw: [u8; IMU_BLOCK_LEN],
     pub decoded: DecodedSample,
     pub dropped_records: u64,

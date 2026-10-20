@@ -2294,6 +2294,7 @@ async fn control_loop<T: RobotIo>(
         let tick_start = Instant::now();
 
         let read_at = proto::clock::monotonic_ns();
+        let mut imu_quality_fault = false;
         let fresh = match safety.read() {
             Ok(sensors) => {
                 state.consecutive_errors.store(0, Ordering::Relaxed);
@@ -2301,6 +2302,7 @@ async fn control_loop<T: RobotIo>(
                 Some(sensors)
             }
             Err(e) => {
+                imu_quality_fault = matches!(e, duck_control::io::IoError::ImuQuality);
                 let n = state.consecutive_errors.fetch_add(1, Ordering::Relaxed) + 1;
                 bus_drops_window += 1;
 
@@ -2334,7 +2336,14 @@ async fn control_loop<T: RobotIo>(
         // safety only observes fresh samples, so a repeat cannot feed the fall debounce, and
         // `known_positions` only advances on fresh ones, so a coasted tick cannot pretend to
         // know where the joints have moved to.
-        let sensors = coast.sample(fresh);
+        let sensors = if imu_quality_fault {
+            // Keep known joint positions for diagnosis, but do not coast an explicitly
+            // rejected attitude into posture decisions or a policy input.
+            coast.reject_attitude();
+            None
+        } else {
+            coast.sample(fresh)
+        };
 
         if let Some(fresh) = fresh.as_ref() {
             safety.observe(fresh, period);
@@ -3550,7 +3559,9 @@ async fn control_loop<T: RobotIo>(
             ),
             _ => (hold, policy_cfg.gain, false, "held".into()),
         };
-        state.moving.store(moving, Ordering::Relaxed);
+        state
+            .moving
+            .store(moving && !imu_quality_fault, Ordering::Relaxed);
 
         // The theremin: a hand's distance in front of the beak, turned into a note and a
         // mouth opening. Before the mouth is written, because while an instrument is up it
@@ -3734,14 +3745,16 @@ async fn control_loop<T: RobotIo>(
         }
 
         // The next feature row pairs its reading with this command.
-        if let Some(watch) = pickup_watch.as_mut() {
+        if !imu_quality_fault && let Some(watch) = pickup_watch.as_mut() {
             watch.commanded(&targets);
         }
 
-        last_targets = targets;
-        match safety.apply(targets, hold, gain) {
-            Ok(applied) => limits.extend(applied.limits),
-            Err(e) => tracing::warn!(error = %e, "bus write failed"),
+        if !imu_quality_fault {
+            last_targets = targets;
+            match safety.apply(targets, hold, gain) {
+                Ok(applied) => limits.extend(applied.limits),
+                Err(e) => tracing::warn!(error = %e, "bus write failed"),
+            }
         }
 
         // Only assemble a frame when somebody is subscribed. On a robot nobody usually is,
@@ -3911,6 +3924,10 @@ impl Coast {
     /// holds. `fallback` covers the ticks before the first successful read.
     fn known_positions(&self, fallback: [f64; NUM_JOINTS]) -> [f64; NUM_JOINTS] {
         self.last.map_or(fallback, |sensors| sensors.positions)
+    }
+
+    fn reject_attitude(&mut self) {
+        self.ticks = COAST_TICKS;
     }
 }
 
@@ -7270,6 +7287,89 @@ mod tests {
         // A sample arriving clears the coast, so the next drop gets the full allowance.
         assert_eq!(coast.sample(Some(walking)), Some(walking));
         assert_eq!(coast.sample(None), Some(walking));
+    }
+
+    #[test]
+    fn an_explicit_attitude_fault_cannot_use_the_bus_coast_allowance() {
+        let mut coast = Coast::new();
+        let mut previous = duck_control::Sensors::default();
+        previous.positions[2] = 0.9;
+        coast.sample(Some(previous));
+        coast.reject_attitude();
+        for _ in 0..5 {
+            assert_eq!(coast.sample(None), None);
+        }
+        assert_eq!(coast.known_positions(DEFAULT_POSITION), previous.positions);
+    }
+
+    #[tokio::test]
+    async fn an_attitude_fault_stops_homing_targets_without_cutting_torque() {
+        struct FaultDuringHome {
+            inner: FakeIo,
+            reads: usize,
+            writes_before: usize,
+            writes_after: usize,
+        }
+        impl RobotIo for FaultDuringHome {
+            fn read(&mut self) -> duck_control::io::Result<duck_control::Sensors> {
+                self.reads += 1;
+                if self.reads >= 30 {
+                    return Err(duck_control::io::IoError::ImuQuality);
+                }
+                self.inner.read()
+            }
+            fn write(&mut self, t: &duck_control::JointTargets) -> duck_control::io::Result<()> {
+                if self.reads >= 30 {
+                    self.writes_after += 1;
+                } else {
+                    self.writes_before += 1;
+                }
+                self.inner.write(t)
+            }
+            fn set_torque(&mut self, on: bool) -> duck_control::io::Result<()> {
+                self.inner.set_torque(on)
+            }
+            fn set_gain(&mut self, kp: u16) -> duck_control::io::Result<()> {
+                if self.reads >= 30 {
+                    self.writes_after += 1;
+                }
+                self.inner.set_gain(kp)
+            }
+            fn reboot(&mut self, id: u8) -> duck_control::io::Result<()> {
+                self.inner.reboot(id)
+            }
+            fn slow_sensors(&mut self) -> duck_control::io::Result<duck_control::SlowSensors> {
+                self.inner.slow_sensors()
+            }
+        }
+        let s = Arc::new(state());
+        let intents = Arc::new(Intents::new());
+        intents.request_init();
+        let task_state = Arc::clone(&s);
+        let handle = tokio::spawn(async move {
+            let mut io = FaultDuringHome {
+                inner: FakeIo::at(DEFAULT_POSITION),
+                reads: 0,
+                writes_before: 0,
+                writes_after: 0,
+            };
+            control_loop_probe_with(&mut io, task_state, intents, Duration::from_millis(2)).await;
+            io
+        });
+        until(
+            || s.consecutive_errors.load(Ordering::Relaxed) >= 20,
+            Duration::from_secs(3),
+            "no injected IMU quality fault",
+        )
+        .await;
+        s.shutdown.store(true, Ordering::Relaxed);
+        let io = handle.await.unwrap();
+        assert!(io.writes_before > 0);
+        assert_eq!(
+            io.writes_after, 0,
+            "homing must not bypass the IMU rejection"
+        );
+        assert_eq!(io.inner.torque, Some(true), "no automatic torque cut");
     }
 
     /// The other half of the same jerk: coming back from a one-tick interruption must not

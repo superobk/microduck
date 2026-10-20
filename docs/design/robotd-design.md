@@ -391,26 +391,78 @@ errors stop tracing, not control. No trace is started by default. Host response
 times and identical bytes are not proof of a new chip sample; there is still no
 MCU sequence number in this 12-byte interface.
 
+Trace schema 2 also records ID200/address124 provenance, the exact gyro int16
+counts and XYZ half words, the sensor-frame quaternion with reconstructed W,
+the fixed mount quaternion, the measured trunk quaternion and the selected
+orientation. These are the accepted payload and decoder stages, not a saved
+wire packet or an independent CRC recomputation. They let an audit distinguish
+an already-jumping payload from a host-math mismatch without reversing the mount.
+
 `ROBOT_IMU_MODE=predict` is an **experimental, opt-in bench mode**. It uses the
-predicted quaternion before the gravity median for at most 40 ms since the last
-accepted measurement. Its initial residual allowance is
+predicted quaternion before the gravity median for at most 40 ms by default since
+the last accepted measurement. `ROBOT_IMU_MAX_PREDICT_MS` explicitly selects a
+bench budget in [40,1000] ms; it does not increase the maximum 40 ms spacing between
+gyro samples. The 1000 ms setting is an experiment for the captured 33-sample,
+0.64-second static payload fault, not a long-term attitude estimator. Its initial residual allowance is
 `ROBOT_IMU_TOLERANCE_DEG` (default 5 degrees) plus one 20 ms rate-alignment
 allowance. These settings have not been validated on a free-standing robot.
-A persistent disagreement or a read gap over 40 ms latches a fault:
+A disagreement beyond the selected budget or a read gap over 40 ms latches a fault:
 `imu_ready()` becomes false and the read returns an explicit IMU quality error.
-The existing warm-up/driving gate stops advancing the learned policy, even if the
-coast buffer holds an earlier sample. It does **not** cut torque or guarantee that
-a biped remains standing; existing hold/limp ramps retain their existing semantics.
+The budget limits predicted outputs. A returning measurement that agrees with
+continuous gyro can recover before the monitor latches, including a return at
+40.08758 ms. This is a measured update, not an extension of the prediction budget.
+An already latched fault cannot be cleared by a good packet.
+The loop immediately excludes the coasted attitude and stops applying targets
+or gains. The bus owner also independently refuses goal-position and gain writes
+while the fault is latched, including homing, hold, skills and other pose ramps.
+No new goal is sent, but servos retain their last goal, gain and torque; that goal
+may still be in progress. This does **not** physically stop a moving biped or
+guarantee standing. There is no automatic torque cut.
 A good packet cannot clear the latch. A successful explicit torque-off (`relax`)
 rearms the decoder and its warm-up before a person requests init/enable again.
+Before the first 25 accepted measurements, a startup/model-loading pause restarts
+warm-up without predicting across it; it cannot clear an already latched fault.
+Every successful torque-off rearms the monitor, including when it has not yet
+faulted, so that the torque-off transaction is not mistaken for missing gyro.
 There is no automatic recovery-to-walk and no invented upright quaternion.
+While that fault is latched, torque-on is refused before any serial write, so an
+explicit init cannot use a coasted sample to bypass it. Torque-off remains
+available. The October 19 A-capture inferred windows are regression fixtures for
+the three half-shaped episodes; their gyro is deliberately neutralised because
+the archived gyro was filtered. They test isolation, not calibration of a live
+motion threshold.
+
+The trace retains `selected_quat` for diagnosis after a fault, explicitly with
+`selected_valid=false` and `control_ready=false`. Consumers must not display that
+retained history as a fresh attitude. `control_ready` also distinguishes the
+25-sample warm-up from usable estimates. In shadow mode, `selected_valid` only
+means a decoded measurement is available; it is not an independent validation.
 
 The monitor checks both gravity and rotation innovations, with quaternion sign
-equivalence. It cannot identify whether the quaternion, gyro, time alignment or
+equivalence. When gravity is consistent but the full rotation differs, a world-Z
+twist aligns the measured orientation to gyro-propagated heading. This preserves
+the measured gravity exactly and reports `heading_aligned` /
+`heading_reference_disagreement`; it is not an absolute-yaw measurement. A real
+tilt failure cannot use that path. The raw quaternion and both residuals remain
+in the trace. This prevents a game-rotation heading-reference change from
+stopping valid tilt feedback while preserving continuous odometry heading.
+It cannot identify whether the quaternion, gyro, time alignment or
 physical handling caused disagreement. It is not independent long-term fusion;
 that requires a verified raw accelerometer interface and a separate validation.
 The operator checks and rollout stages are in
 [`imu-quality-retest.md`](../robot/imu-quality-retest.md).
+
+Offline acceptance separates continuity from protection: complete clean captures
+must not fault, single-frame spikes must not enter the selected gravity, a
+continuous-gyro episode may recover within its explicit budget, and longer or
+missing-gyro episodes must latch with no automatic recovery or new actuator writes.
+An expected lockout passes **protection**, not uninterrupted balance. The 40 ms
+default and the 1000 ms experiment must be reported separately. Real packet/time
+records must be retained without resampling, dropping faults, resetting at event
+boundaries, or substituting inferred XYZ. Complete replay does not validate real
+fast handling, parameter thresholds, the gyro unit contract, or safe physical
+response to the retained servo goal. Slow mutually consistent drift and wrong
+initial attitude remain undetectable without an independent reference.
 
 The seam:
 
