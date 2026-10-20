@@ -5,7 +5,7 @@ umask 077
 STAGE=bench
 LONG=()
 ACTION=run
-TARGET="${ROBOT_TARGET:-root@172.19.8.218}"
+TARGET="${ROBOT_TARGET:-root@192.168.1.56}"
 PACKAGE="${IMU_ACCEPT_PACKAGE:?Set IMU_ACCEPT_PACKAGE to the prepared local package}"
 OUTPUT="${IMU_ACCEPT_OUTPUT:?Set IMU_ACCEPT_OUTPUT to the local log directory}"
 while [[ $# -gt 0 ]]; do

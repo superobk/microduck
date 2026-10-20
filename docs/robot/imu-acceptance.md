@@ -135,7 +135,7 @@ python3 scripts/imu-acceptance/package.py /path/to/offline-audited-package /path
 export IMU_ACCEPT_PACKAGE=/path/to/bench-package
 export IMU_ACCEPT_OUTPUT=/path/to/logs
 bash scripts/imu-acceptance/run.sh --check-local
-bash scripts/imu-acceptance/run.sh --stage bench --long root@172.19.8.218
+bash scripts/imu-acceptance/run.sh --stage bench --long root@192.168.1.56
 ```
 
 打包器只接受这次已验证的二进制及源码SHA，不把任意构建伪装为已验收版本。
