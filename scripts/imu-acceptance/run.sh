@@ -1,6 +1,7 @@
 #!/bin/bash
 # User-run Mac front door. No connection for --check-local. No motion during installation.
 set -euo pipefail
+export LC_ALL=C LANG=C
 umask 077
 STAGE=bench
 LONG=()
@@ -59,12 +60,17 @@ if [[ "$STAGE" == bench ]]; then
   scp "$PACKAGE/"* "$TARGET:$REMOTE/"
   ssh -tt "$TARGET" "cd $REMOTE && bash install-board.sh"
 else
+  # Refresh workflow fixes without installing/restarting robotd in a powered stage.
+  # The unchanged binary must already be present; checksum validation remains mandatory.
+  scp "$PACKAGE/accept.py" "$PACKAGE/capture.py" "$PACKAGE/install-board.sh" \
+    "$PACKAGE/rollback-board.sh" "$PACKAGE/99-imu-acceptance.conf" \
+    "$PACKAGE/manifest.json" "$PACKAGE/README.zh-CN.md" "$PACKAGE/SHA256SUMS" "$TARGET:$REMOTE/"
   ssh "$TARGET" "cd $REMOTE && sha256sum -c SHA256SUMS"
 fi
 NAME="$STAGE-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 printf '%s\n%s\n' "$TARGET" "$NAME" > "$OUTPUT/last-session.txt"
 CODE=0
 ssh -tt -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$TARGET" \
-  "cd $REMOTE && python3 accept.py --stage $STAGE --run $NAME --sha256 $EXPECTED ${LONG[*]:-}" || CODE=$?
+  "cd $REMOTE && python3 -X utf8 accept.py --stage $STAGE --run $NAME --sha256 $EXPECTED ${LONG[*]:-}" || CODE=$?
 fetch "$NAME" || { echo '尚未取回。保持物理支撑；连接恢复后运行同一命令加 --fetch-last。'; exit 1; }
 exit "$CODE"

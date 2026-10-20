@@ -2,7 +2,7 @@ import copy
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import accept
 
@@ -17,14 +17,147 @@ def rows(fault=False):
 
 
 def state(stage):
-    return dict(params=dict(policy="walk", safety=dict(limp=stage == "bench",
+    return dict(params=dict(policy="held" if stage == "bench" else "walk", safety=dict(limp=False,
                 fallen=False, picked_up=False), move=dict(requested=[0., 0., 0.], applied=[0., 0., 0.])))
+
+
+def evidence():
+    return dict(release_confirmed=True, journal_checked=True, torque_on_ns=[], reset_ns=[])
 
 
 class AcceptanceTests(unittest.TestCase):
     def assess(self, values=None, stage="bench", physical=True, complete=True, states=None):
         return accept.assess(rows(True) if values is None else values, stage,
-                             states or [state(stage)], physical, complete)
+                             states or [state(stage)], physical, complete, evidence())
+
+    def test_limp_false_is_normal_after_relax(self):
+        self.assertFalse(state("bench")["params"]["safety"]["limp"])
+        self.assertEqual(self.assess()["verdict"], "PASS")
+
+    def test_release_evidence_is_required_even_if_limp_true(self):
+        s = state("bench")
+        s["params"]["safety"]["limp"] = True
+        result = accept.assess(rows(True), "bench", [s], True, True)
+        self.assertEqual(result["verdict"], "FAIL")
+
+    def test_torque_on_invalidates_bench(self):
+        e = evidence()
+        e["torque_on_ns"] = [1]
+        self.assertEqual(accept.assess(rows(True), "bench", [state("bench")],
+                                      True, True, e)["verdict"], "FAIL")
+
+    def test_external_reset_is_interruption_not_uncommanded_recovery(self):
+        data = rows(True)
+        data[-1] = rows()[-1]
+        e = evidence()
+        e["reset_ns"] = [data[-1]["host_read_end_ns"] - 1]
+        result = accept.assess(data, "bench", [state("bench")], True, True, e)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertNotIn("未经 relax 自动恢复", result["errors"])
+        self.assertTrue(any("验收被中断" in error for error in result["errors"]))
+
+    def test_journal_window_excludes_final_cleanup_but_detects_midrun_reset(self):
+        def entry(ns, message):
+            return dict(__MONOTONIC_TIMESTAMP=str(ns // 1000), MESSAGE=message)
+        entries = [entry(9_000_000_000, "robot.relax: torque off"),
+                   entry(16_000_000_000, "IMU quality monitor rearmed"),
+                   entry(16_010_000_000, "robot.relax: torque off"),
+                   entry(21_000_000_000, "robot.relax: torque off")]
+        e = accept.journal_evidence(entries, dict(monotonic_ns=10_000_000_000),
+                                    11_000_000_000, 20_000_000_000)
+        self.assertTrue(e["release_confirmed"])
+        self.assertEqual(e["reset_ns"], [16_000_000_000, 16_010_000_000])
+        self.assertEqual(e["torque_on_ns"], [])
+        e = accept.journal_evidence(entries[1:], dict(monotonic_ns=10_000_000_000),
+                                    11_000_000_000, 20_000_000_000)
+        self.assertFalse(e["journal_checked"])
+
+    def test_missing_or_corrupt_prerequisite_gives_next_command(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(accept, "BASE", Path(d)):
+            for content in (None, "{broken"):
+                if content:
+                    (Path(d) / "bench-pass.json").write_text(content)
+                with self.assertRaisesRegex(RuntimeError, "--stage bench --long"):
+                    accept.prerequisite("stand", {})
+            accept.prerequisite("bench", {})
+
+    def test_prerequisite_still_requires_same_identity(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(accept, "BASE", Path(d)):
+            snapshot = dict(robotd_sha256="a")
+            accept.save(Path(d) / "bench-pass.json",
+                        dict(verdict="PASS", identity=accept.identity(snapshot)))
+            accept.prerequisite("stand", snapshot)
+            with self.assertRaisesRegex(RuntimeError, "身份改变"):
+                accept.prerequisite("stand", dict(robotd_sha256="b"))
+
+    def test_watchdog_cancel_depends_on_release_not_experiment_success(self):
+        with patch.object(accept, "run") as run:
+            accept.cancel_watchdog("imu-accept-stop-123", False)
+            run.assert_not_called()
+            accept.cancel_watchdog("imu-accept-stop-123", True)
+            run.assert_called_once_with("systemctl", "stop", "imu-accept-stop-123.timer",
+                                        "imu-accept-stop-123.service")
+
+    def test_only_owned_stale_timers_and_services_are_cleared(self):
+        output = ("imu-accept-stop-123.timer loaded active waiting\n"
+                  "imu-accept-stop-123.service loaded inactive dead\n"
+                  "unrelated.timer loaded active waiting\n"
+                  "imu-accept-stop-bogus.timer loaded active waiting")
+        with tempfile.TemporaryDirectory() as d, \
+             patch.object(accept, "run", return_value=output), \
+             patch.object(Path, "exists", return_value=False), \
+             patch.object(accept, "cancel_watchdog") as cancel:
+            accept.clear_stale_watchdogs(Path(d))
+            cancel.assert_called_once_with("imu-accept-stop-123", True)
+
+    def test_live_old_session_blocks_stale_timer_cleanup(self):
+        with tempfile.TemporaryDirectory() as d, \
+             patch.object(accept, "run", return_value="imu-accept-stop-123.timer loaded active waiting"), \
+             patch.object(Path, "exists", return_value=True), \
+             patch.object(accept, "cancel_watchdog") as cancel:
+            with self.assertRaisesRegex(RuntimeError, "另一轮"):
+                accept.clear_stale_watchdogs(Path(d))
+            cancel.assert_not_called()
+
+    def test_aborted_session_cancels_timer_only_after_successful_final_relax(self):
+        # Reproduce the first real bench's user-stop path, including finally cleanup.
+        for cleanup_fails in (False, True):
+            with self.subTest(cleanup_fails=cleanup_fails), tempfile.TemporaryDirectory() as d:
+                base = Path(d)
+                (base / "imu-1.jsonl").write_text("")
+                original_read = Path.read_text
+
+                def read(path, *args, **kwargs):
+                    return "test-machine" if str(path) == "/etc/machine-id" else original_read(path, *args, **kwargs)
+
+                def command(*args):
+                    if "-p" in args and "Environment" in args:
+                        return ("ROBOT_IMU_MODE=predict ROBOT_IMU_MAX_PREDICT_MS=40 "
+                                "ROBOT_IMU_TOLERANCE_DEG=5 ROBOT_IMU_TRACE_DIR=" + d)
+                    return ""
+
+                def collect(*args, **kwargs):
+                    (base / "bench-test" / "state.jsonl").write_text("{}\n")
+                    return Mock()
+
+                ack = dict(monotonic_ns=1, cursor="test")
+                releases = [ack, ack, RuntimeError("no fresh release") if cleanup_fails else ack]
+                with patch.object(accept, "BASE", base), patch.object(accept, "TRACE", base), \
+                     patch.object(accept, "TRACE_FILE", None), patch.object(accept, "AUDIT_DIR", None), \
+                     patch.object(accept, "RUN_DEADLINE", float("inf")), \
+                     patch.object(Path, "read_text", read), patch.object(accept, "run", side_effect=command), \
+                     patch.object(accept, "rpc") as rpc, patch.object(accept, "relax", side_effect=releases), \
+                     patch.object(accept, "clear_stale_watchdogs"), patch.object(accept, "cancel_watchdog") as cancel, \
+                     patch.object(accept.capture, "snapshot", return_value=dict(policy_identity_issues=[])), \
+                     patch.object(accept.shutil, "which", return_value="/bin/robotctl"), \
+                     patch.object(accept.subprocess, "Popen", side_effect=collect), \
+                     patch.object(accept.time, "sleep"), patch.object(accept, "phase", side_effect=RuntimeError("用户停止")):
+                    self.assertEqual(accept.session("bench", True, "bench-test", "sha"), 2)
+                    self.assertEqual(cancel.call_args.args[1], not cleanup_fails)
+                    self.assertNotIn("robot.init", [c.args[0] for c in rpc.call_args_list])
+                    self.assertNotIn("robot.enable", [c.args[0] for c in rpc.call_args_list])
+                    self.assertTrue((base / "bench-test" / "finished-acceptance.json").exists())
+                    self.assertFalse((base / "bench-pass.json").exists())
 
     def test_no_fault_is_not_fault_response_pass(self):
         self.assertEqual(self.assess(rows())["verdict"], "NOT_EXERCISED")

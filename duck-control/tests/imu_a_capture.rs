@@ -42,7 +42,7 @@ fn shadow_preserves_a_capture_quaternion_and_gravity() {
             for (word, bytes) in detail
                 .quaternion_half_words
                 .iter()
-                .zip(row.raw[6..].chunks_exact(2))
+                .zip(row.raw[6..].as_chunks::<2>().0.iter())
             {
                 assert_eq!(*word, u16::from_le_bytes([bytes[0], bytes[1]]));
             }

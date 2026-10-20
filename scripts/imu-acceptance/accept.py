@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Explicit supported experiments. Never run at boot. No firmware writes."""
 import argparse
+import fcntl
 import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import select
 import shlex
@@ -71,8 +73,9 @@ def relax(out):
     while time.monotonic() < deadline:
         log = run("journalctl", "-u", "robotd", "--after-cursor=" + cursor, "--no-pager")
         if "robot.relax: torque off" in log:
-            save(out / "relax-confirmed.json", dict(result=result, **capture.stamp()))
-            return
+            confirmation = dict(result=result, cursor=cursor, **capture.stamp())
+            save(out / "relax-confirmed.json", confirmation)
+            return confirmation
         time.sleep(.25)
     raise RuntimeError("未收到新的 torque off 确认。保持支撑，不能判为完成。")
 
@@ -83,13 +86,79 @@ def identity(snapshot):
              "machine_id", "boot_id", "invocation_id")}
 
 
-def assess(rows, stage, states, physical_ok, complete):
+def prerequisite(stage, snapshot):
+    if stage == "bench":
+        return
+    name = "bench" if stage == "stand" else "stand"
+    path = BASE / (name + "-pass.json")
+    command = "bash tools/zero3w_imu_accept.sh --stage " + name
+    if name == "bench":
+        command += " --long"
+    try:
+        prior = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"缺少有效的{name}通过记录（{path.name}）。先在Mac运行：{command}；"
+                           "看到PASS后再继续。") from exc
+    if prior.get("identity") != identity(snapshot) or prior.get("verdict") != "PASS":
+        raise RuntimeError(f"上阶段未通过或身份改变。先重新运行：{command}")
+
+
+def cancel_watchdog(name, released):
+    # An unrelated experiment error must not leave a delayed reset armed.
+    if released:
+        run("systemctl", "stop", name + ".timer", name + ".service")
+
+
+def clear_stale_watchdogs(out):
+    units = run("systemctl", "list-units", "--all", "--plain", "--no-legend",
+                "imu-accept-stop-*.timer", "imu-accept-stop-*.service")
+    names = set()
+    for line in units.splitlines():
+        unit = line.split()[0] if line.split() else ""
+        match = re.fullmatch(r"(imu-accept-stop-(\d+))\.(timer|service)", unit)
+        if match:
+            if Path("/proc", match[2]).exists():
+                raise RuntimeError("另一轮验收进程仍存在；结束该轮后再试")
+            names.add(match[1])
+    for name in sorted(names):
+        cancel_watchdog(name, True)
+    save(out / "stale-watchdogs-cleared.json", sorted(names))
+
+
+def journal_evidence(entries, release, start, end):
+    """Journal timestamps share the board's monotonic clock with raw payload capture."""
+    resets, torque_on = [], []
+    release_seen = False
+    for entry in entries:
+        ns = int(entry["__MONOTONIC_TIMESTAMP"]) * 1000
+        message = entry.get("MESSAGE", "")
+        if (release["monotonic_ns"] - 10_000_000_000 <= ns <= release["monotonic_ns"] and
+                "robot.relax: torque off" in message):
+            release_seen = True
+        if release["monotonic_ns"] <= ns <= end and "torque on=true" in message:
+            torque_on.append(ns)
+        if start <= ns <= end and ("robot.relax: torque off" in message or
+                                  "IMU quality monitor rearmed" in message):
+            resets.append(ns)
+    return dict(release_confirmed=release_seen, journal_checked=release_seen,
+                torque_on_ns=torque_on, reset_ns=resets)
+
+
+def assess(rows, stage, states, physical_ok, complete, evidence=None):
     """Fail closed: incomplete evidence never authorizes a subsequent powered stage."""
     errors = []
     if not complete or not physical_ok:
         errors.append("操作未完整完成，或实物验收未通过")
     if len(rows) < 500 or not states:
         errors.append("有效记录不足")
+    evidence = evidence or {}
+    if evidence.get("journal_checked") is not True:
+        errors.append("缺少本轮控制状态日志核对")
+    if evidence.get("reset_ns"):
+        errors.append("采集窗口收到relax/重新布防，验收被中断；不是未经relax自动恢复")
+    if stage == "bench" and (evidence.get("release_confirmed") is not True or
+                             evidence.get("torque_on_ns")):
+        errors.append("支架阶段缺少新torque off确认，或之后出现torque on")
     unknown = 0
     latched = False
     previous = None
@@ -104,7 +173,7 @@ def assess(rows, stage, states, physical_ok, complete):
             unknown += 1
             if d.get("selected_valid") is not False or d.get("control_ready") is not False:
                 errors.append("无效姿态仍可进入控制")
-        elif latched:
+        elif latched and not evidence.get("reset_ns"):
             errors.append("未经 relax 自动恢复")
         if status == "predicted":
             if (q["since_good_ms"] > 40.000001 or previous is None or
@@ -117,8 +186,7 @@ def assess(rows, stage, states, physical_ok, complete):
             errors.append("有效性字段缺失/不一致")
     for state in states:
         p = state.get("params", {})
-        if stage == "bench" and p.get("safety", {}).get("limp") is not True:
-            errors.append("支架无动力阶段并非始终 limp")
+        # safety.limp means LimpFall::Limp, not general torque-off.
         if stage != "bench":
             safety = p.get("safety", {})
             if (safety.get("limp") is not False or safety.get("fallen") is not False or
@@ -239,11 +307,18 @@ def session(stage, long, run_name, expected_sha):
     window_start = window_end = None
     snapshot = None
     error = None
+    release = None
+    evidence = None
     try:
         # Other command sources stay stopped after the experiment.
         run("systemctl", "stop", "padd", "btd", "mediad")
         rpc("robot.stop")
         relax(out)
+        clear_stale_watchdogs(out)
+        # A queued old service may have completed during cleanup. Establish a fresh
+        # release baseline only after both its timer and service have been stopped.
+        release = relax(out)
+        save(out / "initial-relax-confirmed.json", release)
         snapshot = capture.snapshot(out, expected_sha)
         snapshot["machine_id"] = Path("/etc/machine-id").read_text().strip()
         snapshot["invocation_id"] = run("systemctl", "show", "robotd", "-p", "InvocationID", "--value")
@@ -259,18 +334,15 @@ def session(stage, long, run_name, expected_sha):
                 env.get("ROBOT_IMU_TOLERANCE_DEG") != "5" or
                 env.get("ROBOT_IMU_TRACE_DIR") != str(TRACE)):
             raise RuntimeError("必须使用predict/40ms验收候选")
-        if stage != "bench":
-            prerequisite = "bench" if stage == "stand" else "stand"
-            prior = json.loads((BASE / (prerequisite + "-pass.json")).read_text())
-            if prior["identity"] != identity(snapshot) or prior["verdict"] != "PASS":
-                raise RuntimeError("上阶段未通过，或程序/参数/模型已变化；重新验收")
+        prerequisite(stage, snapshot)
         # Independent board-side timeout, including an SSH/Mac disconnection.
         # Operator must maintain a catch/support arrangement throughout powered tests.
         robotctl = shutil.which("robotctl")
         if not robotctl:
             raise RuntimeError("robotctl unavailable")
-        run("systemd-run", "--unit=" + watchdog, "--on-active=300s",
+        run("systemd-run", "--unit=" + watchdog, "--on-active=300s", "--timer-property=AccuracySec=1s",
             robotctl, "robot", "relax", "--yes", "--json")
+        save(out / "watchdog.json", dict(unit=watchdog, **capture.stamp()))
         RUN_DEADLINE = time.monotonic() + 270
         TRACE_FILE = max(TRACE.glob("imu-[0-9]*.jsonl"), key=lambda p: p.stat().st_mtime_ns)
         collector = subprocess.Popen([sys.executable, str(Path(capture.__file__)),
@@ -321,13 +393,35 @@ def session(stage, long, run_name, expected_sha):
         # Fix the evidence cutoff BEFORE relax resets the latch. Stop first; potentially
         # large file reads/checksums must never delay an operator's stop request.
         window_end = window_end or time.monotonic_ns()
-        for stop_action in (lambda: rpc("robot.stop"), lambda: relax(out)):
+        released = False
+        for action_name, stop_action in (("stop", lambda: rpc("robot.stop")),
+                                        ("relax", lambda: relax(out))):
             try:
                 stop_action()
+                if action_name == "relax":
+                    released = True
             except Exception as exc:
                 error = str(exc)
                 complete = False
                 print("未能确认停止/relax。必须保持物理支撑；日志不算通过。", flush=True)
+        try:
+            # Do this immediately, including after a user stop or failed prerequisite.
+            if (out / "watchdog.json").exists():
+                cancel_watchdog(watchdog, released)
+        except Exception as exc:
+            complete = False
+            error = "定时器清理失败：" + str(exc)
+        try:
+            if release and window_start:
+                log = run("journalctl", "-u", "robotd", "--after-cursor=" + release["cursor"],
+                          "--no-pager", "-o", "json")
+                (out / "control-journal.jsonl").write_text(log + "\n")
+                evidence = journal_evidence([json.loads(s) for s in log.splitlines() if s],
+                                            release, window_start, window_end)
+                save(out / "control-evidence.json", evidence)
+        except Exception as exc:
+            complete = False
+            error = "控制日志核对失败：" + str(exc)
         time.sleep(.1)  # Allow the trace writer to drain records preceding the fixed cutoff.
         full_rows = []
         for source in ([TRACE_FILE] if TRACE_FILE else []):
@@ -368,9 +462,6 @@ def session(stage, long, run_name, expected_sha):
         except Exception as exc:
             complete = False
             error = repr(exc)
-        # Timer is cancelled only after torque-off was confirmed.
-        if error is None:
-            subprocess.run(["systemctl", "stop", watchdog + ".timer"], check=False)
         states = []
         state_path = out / "state.jsonl"
         if state_path.exists():
@@ -389,7 +480,7 @@ def session(stage, long, run_name, expected_sha):
                                    for line in events.read_text().splitlines()):
             physical_ok = False
         try:
-            report = assess(sealed, stage, states, physical_ok, complete)
+            report = assess(sealed, stage, states, physical_ok, complete, evidence)
         except (ValueError, KeyError, TypeError) as exc:
             report = dict(stage=stage, verdict="FAIL", next_stage_allowed=False,
                           errors=["记录无法完整判读：" + str(exc)])
@@ -401,7 +492,9 @@ def session(stage, long, run_name, expected_sha):
                     for a, b in zip(sealed, sealed[1:]))):
             report.update(verdict="FAIL", next_stage_allowed=False)
             report["errors"].append("时间窗口缺头/缺尾")
-        report.update(identity=identity(snapshot or {}), error=error)
+        report.update(identity=identity(snapshot or {}), error=error, control_evidence=evidence)
+        if error:
+            report["errors"].append(error)
         save(out / "result.json", report)
         # Re-running a prerequisite invalidates an older pass, including on failure.
         pass_file = BASE / (stage + "-pass.json")
@@ -429,4 +522,10 @@ if __name__ == "__main__":
     os.umask(0o077)
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     signal.signal(signal.SIGHUP, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
-    sys.exit(session(args.stage, args.long, args.run, args.sha256))
+    BASE.mkdir(parents=True, exist_ok=True)
+    with (BASE / "session.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.exit("另一轮验收仍在运行，请先结束该轮。")
+        sys.exit(session(args.stage, args.long, args.run, args.sha256))

@@ -3,7 +3,7 @@
 本流程使用 `0.16.3-imu16p4-quality-63e0fa0c` 候选，默认保护窗口40ms。
 它是**有支撑的实验候选，不是已通过实机验收的正式版本**。
 保护机制、故障后保持最后目标等限制见[robotd设计](../design/robotd-design.md)。
-本次工具没有在实机运行；本地测试通过不等于鸭子已经站稳。
+实机稳定性尚未验收；本地工具测试通过不等于鸭子已经站稳。
 
 ## 只按这个顺序做
 
@@ -25,6 +25,7 @@ bash tools/zero3w_imu_accept.sh --stage bench --long
 已安装同一候选则复用。**本组不会执行init或enable，不会向真实传感器注入假数据。**
 自动标记 `bench_fixed_static_begin/end`，静止采集180秒，最后按提示确认实物是否一直静止。
 自动封存原始payload、状态、日志、配置/模型身份、标签和SHA256，并取回Mac。
+每次运行都会同步最新版采集工具。`stand/walk`只更新工具、不重装或重启robotd。
 
 结果看终端和 `result.json`：
 
@@ -37,6 +38,14 @@ bash tools/zero3w_imu_accept.sh --stage bench --long
 本组验证的是无动力保护链路。目标/增益/使能写入被拒绝的证明来自Rust测试；
 这份日志没有独立总线嗅探，不能冒充实际总线写入计数或承重故障测试。
 如果多次没有自然故障，下一步应做隔离总线台架注入/嗅探；不要把等待无故障改成PASS。
+
+若此前 `stand` 报 `FileNotFoundError`，原因是没有有效的 `bench-pass.json`。
+使用上面的 `bench --long` 命令重新采集即可；不要手动创建通过文件。
+旧工具把 `safety.limp`（跌倒释放模式）误作普通扭矩状态，并在用户中止后遗留定时器；
+修订版以新 `torque off` 日志和随后无 `torque on` 为无动力证据，
+清理遗留定时器，且在确认结束时扭矩释放后取消本轮定时器，包括用户中止的情况。
+采集窗口若收到额外relax/重新布防，结果为中断失败，不再报告为“未经relax自动恢复”。
+旧记录保持原样，不能据此跳过重新验收。
 
 ### 2. 零指令承重站立
 
@@ -95,6 +104,8 @@ bash tools/zero3w_imu_accept.sh --stage walk
 提示确认有30秒期限，超时终止。SSH断开会尝试清理；板端另有5分钟relax定时器，
 它不是瞬时急停。前进指令还有robotd原有deadman，停止前进不等于释放扭矩。
 只有收到新 `robot.relax: torque off` 日志才算清理成功。
+若relax确认失败，保留本轮兜底定时器；确认成功才同时停止其timer和service。
+并发采集会被拒绝，避免不同实验相互干扰。
 脚本只标注操作发生时间，不假称比人工反应更早捕获“真实后退开始”。
 
 ## 日志与恢复
@@ -110,6 +121,8 @@ bash tools/zero3w_imu_accept.sh --stage walk
 `events.jsonl` 对齐动作标签；`state.jsonl` 有控制指令、目标和实测关节；
 `commands.jsonl` 记录脚本发送的每条请求、时间和应答；
 `journal.log` 保存状态切换，`snapshot.json` / `end/snapshot.json` 核对身份。
+`initial-relax-confirmed.json`保存初始释放确认；`control-journal.jsonl`、
+`control-evidence.json`记录窗口内的扭矩与保护复位证据；`watchdog.json`记录本轮定时器。
 缺日志、尾部缺失、丢记录、错误模式或中途换程序都不能算PASS。
 所有日志保留在板端，Mac断网后用同一入口重取：
 
@@ -145,7 +158,9 @@ bash scripts/imu-acceptance/run.sh --stage bench --long root@192.168.1.56
 
 这次控制源码SHA为 `63e0fa0c4d48555109df5c9b4286908e92bcd8f112e375bb0447f8c7518872a1`；
 ARM64二进制SHA为 `d19c9ccf586c27a0b1581cab35fcad57fb9c7746e014953fb38429201d919a39`。
-当前源码重新运行336项常规Rust测试通过，一键工具17项Python测试通过。
+当前控制源码此前336项常规Rust测试通过，一键工具30项Python测试通过，
+包含中止后的定时器清理、缺失前置记录、窗口内relax和模拟SSH/SCP入口回归。
+此轮仅修订采集工具，控制二进制及保护参数不变，修订工具尚需实机重验。
 同一控制源码此前18项ONNX测试、ARM64构建和Linux严格Clippy通过。
 
 完整日志重放95,822条不同时间/payload记录，另有7,566条重叠快照，不重复计作独立证据：
