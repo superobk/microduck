@@ -67,7 +67,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
       - run: python3 -m unittest discover -s scripts/imu-acceptance -p 'test_*.py' -v
-      - run: bash -n scripts/imu-acceptance/run.sh scripts/imu-acceptance/install-board.sh scripts/imu-acceptance/rollback-board.sh
+      - run: for script in scripts/imu-acceptance/*.sh; do bash -n "$script"; done
 
       # These are the pieces of this repo that run without being compiled — four on a robot,
       # and `provision-board.sh` and `dev-push.sh` on a developer's machine — so nothing else

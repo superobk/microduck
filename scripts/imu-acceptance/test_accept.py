@@ -114,6 +114,25 @@ class AcceptanceTests(unittest.TestCase):
         b["models_sha256"]["walk"] = "new"
         self.assertNotEqual(accept.identity(a), accept.identity(b))
 
+    def test_ready_does_not_allow_grossly_wrong_initial_tilt(self):
+        row = rows()[0]
+        row["decoded"]["selected_quat"] = [0., 1., 0., 0.]
+        with self.assertRaisesRegex(RuntimeError, "15°"):
+            accept.require_upright(row)
+        row["decoded"]["selected_quat"] = [1., 0., 0., 0.]
+        accept.require_upright(row)
+        row["decoded"]["quality"]["status"] = "predicted"
+        with self.assertRaises(RuntimeError):
+            accept.require_upright(row)
+
+    def test_setup_gate_ignores_quaternion_sign_and_pure_yaw(self):
+        row = rows()[0]
+        row["decoded"]["selected_quat"] = [0., 0., 0., -1.]
+        accept.require_upright(row)
+        row["decoded"]["selected_quat"] = [float("nan"), 0., 0., 0.]
+        with self.assertRaises(RuntimeError):
+            accept.require_upright(row)
+
 
 if __name__ == "__main__":
     unittest.main()

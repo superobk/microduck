@@ -184,6 +184,19 @@ def latest_trace():
     raise RuntimeError("没有完整IMU记录")
 
 
+def require_upright(row):
+    """Setup check only, not a replacement for the production disagreement detector."""
+    d = row["decoded"]
+    if not d.get("control_ready") or d["quality"]["status"] not in ("good", "heading_aligned"):
+        raise RuntimeError("姿态未稳定就绪；不发送动力指令")
+    q = d.get("selected_quat", [])
+    if len(q) != 4 or any(not math.isfinite(v) for v in q) or abs(sum(v*v for v in q) - 1) > .001:
+        raise RuntimeError("姿态无效；不发送动力指令")
+    tilt = math.degrees(math.acos(max(-1, min(1, 1 - 2 * (q[1]**2 + q[2]**2)))))
+    if tilt > 15:
+        raise RuntimeError(f"近似竖直摆放但姿态倾角{tilt:.1f}°超过15°检查范围；保持relax分析")
+
+
 def phase(out, name, seconds, powered=False, vx=0.0):
     mark(out, name + "_begin")
     print(f"{name}：{seconds}秒。b 回车标记后退；s 回车表示已托稳并立即停止。", flush=True)
@@ -270,8 +283,8 @@ def session(stage, long, run_name, expected_sha):
             raise RuntimeError("状态采集未启动")
         # Refresh the torque-off guard before measuring; warmup must finish.
         time.sleep(2)
-        if not latest_trace()["decoded"].get("control_ready"):
-            raise RuntimeError("IMU尚未就绪；不发送init/enable")
+        if stage != "bench":
+            require_upright(latest_trace())
         if stage == "bench":
             # No init, no enable, no synthetic mutation of the live sensor.
             # Bench is at most180s; the independent300s relax cannot reset its measured latch.
@@ -281,10 +294,12 @@ def session(stage, long, run_name, expected_sha):
             confirm("采集结束。躯干是否一直固定、无调整，腿脚无支架/手接触，舵机未动作？")
         else:
             confirm("双脚平放地面，托稳躯干，腿脚无阻挡。接下来init只到HOME（不是seat），会使关节动作。")
+            require_upright(latest_trace())
             mark(out, "init_home")
             rpc("robot.init")
             phase(out, "home_supported", 4, powered=True)
             confirm("HOME已完成且未卡住。保持托稳，准备enable平衡控制。")
+            require_upright(latest_trace())
             mark(out, "enable")
             rpc("robot.enable", {"on": True, "toggle": False})
             phase(out, "enable_supported", 3, powered=True)
@@ -293,6 +308,7 @@ def session(stage, long, run_name, expected_sha):
             phase(out, "hands_off_zero_stand", 30, powered=True)
             if stage == "walk":
                 confirm("前方至少0.5米无障碍，有人随行保护。将自动以0.05m/s前进3秒，再停止。")
+                require_upright(latest_trace())
                 phase(out, "walk_forward", 3, powered=True, vx=.05)
                 phase(out, "walk_stopped", 5, powered=True)
             window_end = time.monotonic_ns()
