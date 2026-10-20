@@ -2288,6 +2288,7 @@ async fn control_loop<T: RobotIo>(
     // `robot.state` timestamp by one inference otherwise. It rides the coast: a coasted tick
     // republishes the last fresh sample, so it must republish that sample's read time too.
     let mut sensors_read_ns = 0u64;
+    let mut last_skill_refusal: Option<(String, Instant)> = None;
     while !state.shutdown.load(Ordering::Relaxed) {
         ticker.tick().await;
         let tick_start = Instant::now();
@@ -2505,7 +2506,16 @@ async fn control_loop<T: RobotIo>(
                             Ok(true) => tracing::warn!(skill = %name, "skill started"),
                             Ok(false) => {}
                             Err(reason) => {
-                                tracing::debug!(skill = %name, reason, "skill refused");
+                                // A held button repeats at 50Hz. Make the first refusal
+                                // visible without evicting the evidence with identical lines.
+                                let key = format!("{name}: {reason}");
+                                if should_log_skill_refusal(
+                                    &mut last_skill_refusal,
+                                    &key,
+                                    tick_start,
+                                ) {
+                                    tracing::warn!(skill = %name, reason, "skill refused");
+                                }
                             }
                         }
                     }
@@ -3911,6 +3921,20 @@ impl Coast {
 /// 20 ms bus hiccup it is itself the discontinuity the reset exists to prevent.
 fn reset_on_resume(stopped_at: Option<Instant>, now: Instant) -> bool {
     stopped_at.is_none_or(|since| now.duration_since(since) >= RESET_AFTER_PAUSE)
+}
+
+fn should_log_skill_refusal(
+    previous: &mut Option<(String, Instant)>,
+    key: &str,
+    now: Instant,
+) -> bool {
+    let due = previous
+        .as_ref()
+        .is_none_or(|(last, at)| last != key || now.duration_since(*at) >= Duration::from_secs(1));
+    if due {
+        *previous = Some((key.to_owned(), now));
+    }
+    due
 }
 
 /// Whether a voice bank has anything to play. One directory walk at startup: the bank is a
@@ -5608,6 +5632,33 @@ mod mapping {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn held_skill_refusal_is_visible_but_rate_limited() {
+        let now = std::time::Instant::now();
+        let mut previous = None;
+        assert!(super::should_log_skill_refusal(
+            &mut previous,
+            "roulade: sitting",
+            now
+        ));
+        for ms in 1..1000 {
+            assert!(!super::should_log_skill_refusal(
+                &mut previous,
+                "roulade: sitting",
+                now + std::time::Duration::from_millis(ms)
+            ));
+        }
+        assert!(super::should_log_skill_refusal(
+            &mut previous,
+            "roulade: sitting",
+            now + std::time::Duration::from_secs(1)
+        ));
+        assert!(super::should_log_skill_refusal(
+            &mut previous,
+            "roulade: another move",
+            now + std::time::Duration::from_secs(1)
+        ));
+    }
     use super::*;
 
     /// A `RobotState` over a real config file, for the two calls that write one.

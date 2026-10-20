@@ -374,6 +374,44 @@ first repeated block is what teaches everyone to ignore the message; past the th
 rate-limited, because a board that has stopped refreshing produces one per tick and 50 Hz of
 identical warnings evicts the journal.
 
+**IMU consistency and the imu16p4 candidate.** This branch retains the board-specific
+16.4 counts/(degree/s) wire contract; it is not the native sensor sensitivity. A
+host quaternion is reconstructed from three half words, so unit norm alone cannot
+detect a bad component: reconstructing `w` makes even a wrong `xyz` unit length.
+
+`imu_quality::Monitor` compares the quaternion with a body-rate prediction, using
+unfiltered gyro and host response times. The default **shadow** mode is bit-identical
+to the imu16p4 decoder: a diagnostic flag changes neither pose nor motor commands.
+`ROBOT_IMU_TRACE_DIR` enables JSONL from the existing bus owner, including the raw
+12 bytes, monotonic read start/end, unfiltered gyro, measured/selected quaternion,
+filtered gravity, quality mode/residuals and dropped-record count. The directory
+must already exist. Files are private and uniquely named per open; a bounded
+256-record channel never blocks the tick, and each file stops at 64 MiB. Disk
+errors stop tracing, not control. No trace is started by default. Host response
+times and identical bytes are not proof of a new chip sample; there is still no
+MCU sequence number in this 12-byte interface.
+
+`ROBOT_IMU_MODE=predict` is an **experimental, opt-in bench mode**. It uses the
+predicted quaternion before the gravity median for at most 40 ms since the last
+accepted measurement. Its initial residual allowance is
+`ROBOT_IMU_TOLERANCE_DEG` (default 5 degrees) plus one 20 ms rate-alignment
+allowance. These settings have not been validated on a free-standing robot.
+A persistent disagreement or a read gap over 40 ms latches a fault:
+`imu_ready()` becomes false and the read returns an explicit IMU quality error.
+The existing warm-up/driving gate stops advancing the learned policy, even if the
+coast buffer holds an earlier sample. It does **not** cut torque or guarantee that
+a biped remains standing; existing hold/limp ramps retain their existing semantics.
+A good packet cannot clear the latch. A successful explicit torque-off (`relax`)
+rearms the decoder and its warm-up before a person requests init/enable again.
+There is no automatic recovery-to-walk and no invented upright quaternion.
+
+The monitor checks both gravity and rotation innovations, with quaternion sign
+equivalence. It cannot identify whether the quaternion, gyro, time alignment or
+physical handling caused disagreement. It is not independent long-term fusion;
+that requires a verified raw accelerometer interface and a separate validation.
+The operator checks and rollout stages are in
+[`imu-quality-retest.md`](../robot/imu-quality-retest.md).
+
 The seam:
 
 ```rust
