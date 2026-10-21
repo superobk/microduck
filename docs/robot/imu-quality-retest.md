@@ -1,5 +1,8 @@
 # IMU quality candidate: staged retest and recovery diagnosis
 
+For the current candidate, use the [one-command supported acceptance guide](imu-acceptance.md).
+The manual steps below describe the earlier trace/shadow investigation, not an acceptance pass.
+
 This branch starts at official `daemon-v0.16.3` plus the separately committed
 16.4-counts/(degree/s) gyro conversion. It is not an official signed release.
 Shadow mode preserves that candidate's decoded outputs; predict mode is a bench

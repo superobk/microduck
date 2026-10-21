@@ -147,6 +147,16 @@ impl DynamixelIo {
                 .filter(|v| v.is_finite() && *v > 0.0 && *v <= 45.0)
                 .ok_or_else(|| IoError::Bus("ROBOT_IMU_TOLERANCE_DEG must be in (0,45]".into()))?;
         }
+        if let Ok(value) = std::env::var("ROBOT_IMU_MAX_PREDICT_MS") {
+            quality.max_predict_ns = value
+                .parse::<u64>()
+                .ok()
+                .filter(|ms| (40..=1000).contains(ms))
+                .ok_or_else(|| {
+                    IoError::Bus("ROBOT_IMU_MAX_PREDICT_MS must be in [40,1000]".into())
+                })?
+                * 1_000_000;
+        }
         let controller = open_controller(port, BAUD_RATE, fast_sync_read)?;
         let imu_trace = std::env::var_os("ROBOT_IMU_TRACE_DIR")
             .and_then(|directory| {
@@ -450,6 +460,11 @@ impl DynamixelIo {
     /// Writing the rest costs the same as it would have, and the error names every joint that
     /// did not answer so the caller can decide whether to ask again.
     pub fn set_torque(&mut self, on: bool) -> Result<()> {
+        // An explicit init must not bypass a latched orientation fault using a coasted sample.
+        // Torque-off remains available and rearms only after every motor acknowledges it.
+        if on && self.imu.quality_faulted() {
+            return Err(IoError::ImuQuality);
+        }
         let mut failed = Vec::new();
         for &id in &JOINT_IDS {
             if let Err(e) = self.controller.write_torque_enable(id, on) {
@@ -457,10 +472,10 @@ impl DynamixelIo {
             }
         }
         if failed.is_empty() {
-            if !on && self.imu.quality_faulted() {
+            if !on {
                 self.imu.rearm_after_relax();
                 tracing::warn!(
-                    "IMU quality fault rearmed after torque off; awaiting fresh orientation"
+                    "IMU quality monitor rearmed after torque off; awaiting fresh orientation"
                 );
             }
             Ok(())
@@ -583,9 +598,11 @@ impl RobotIo for DynamixelIo {
             let (decoded, sample) = self.imu.decode_at(&raw, read_end);
             if let Some(trace) = &self.imu_trace {
                 trace.record(crate::imu_trace::Record {
-                    schema_version: 1,
+                    schema_version: 2,
                     host_read_start_ns: read_start,
                     host_read_end_ns: read_end,
+                    device_id: IMU_DXL_ID,
+                    register_address: READ_ADDR,
                     raw,
                     decoded: sample,
                     dropped_records: 0,
@@ -623,6 +640,11 @@ impl RobotIo for DynamixelIo {
     }
 
     fn write(&mut self, targets: &JointTargets) -> Result<()> {
+        // Homing/hold/skill transitions also use this entry, not just the learned policy.
+        // An unknown attitude must not allow any of them to advance the motor targets.
+        if self.imu.quality_faulted() {
+            return Err(IoError::ImuQuality);
+        }
         self.controller
             .sync_write_goal_position(&JOINT_IDS, &targets.positions)
             .map_err(|e| IoError::Bus(format!("sync_write goal positions: {e}")))
@@ -643,6 +665,9 @@ impl RobotIo for DynamixelIo {
     }
 
     fn set_gain(&mut self, kp: u16) -> Result<()> {
+        if self.imu.quality_faulted() {
+            return Err(IoError::ImuQuality);
+        }
         // I and D are written too, at zero — the prototype's `--ki`/`--kd` defaults, which
         // its startup writes to every motor. These are RAM registers, so every power-up
         // restores the servo's factory values, and the factory D gain is not zero: left in
@@ -735,6 +760,42 @@ impl RobotIo for DynamixelIo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latched_imu_fault_refuses_torque_targets_and_gain_before_any_serial_write() {
+        let mut imu = SflpDecoder::default();
+        imu.configure_quality(crate::imu_quality::Config {
+            mode: crate::imu_quality::Mode::Predict,
+            ..Default::default()
+        });
+        let mut raw = [0u8; IMU_BLOCK_LEN];
+        for (i, word) in [0x3000u16, 0x3800, 0xb800].iter().enumerate() {
+            raw[6 + 2 * i..8 + 2 * i].copy_from_slice(&word.to_le_bytes());
+        }
+        // A startup preflight pause now restarts warm-up. Exercise the armed gate.
+        for i in 0..25 {
+            imu.decode_at(&raw, 1 + i * 20_000_000);
+        }
+        raw[6..8].copy_from_slice(&0x2c00u16.to_le_bytes());
+        imu.decode_at(&raw, 540_000_001);
+        assert!(imu.quality_faulted());
+        let mut io = DynamixelIo {
+            // Deliberately no serial handle: touching it would panic. Refusal must come first.
+            controller: Xl330Controller::new().with_protocol_v2(),
+            port: String::new(),
+            ids: Vec::new(),
+            fast_sync_read: false,
+            imu,
+            stale_imu: StaleImuTracker::default(),
+            imu_trace: None,
+        };
+        assert!(matches!(io.set_torque(true), Err(IoError::ImuQuality)));
+        assert!(matches!(
+            io.write(&JointTargets::new([0.9; NUM_JOINTS])),
+            Err(IoError::ImuQuality)
+        ));
+        assert!(matches!(io.set_gain(100), Err(IoError::ImuQuality)));
+    }
 
     /// One silent servo is the only case a swap can be inferred from. With two silent there is
     /// no telling which the fresh servo replaces, and guessing would flash a leg joint as a neck

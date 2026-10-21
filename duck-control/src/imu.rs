@@ -1,22 +1,23 @@
-//! The `imu_to_dxl` v2 board (LSM6DSV16X), decoded.
+//! Host decoder for the IMU's 12-byte, address-124 wire contract.
 //!
 //! One IMU, one code path. The board rides the Dynamixel bus and its 12-byte block is
 //! fetched in the same `sync_read` as the servos, so there is no separate sensor to poll
-//! and no fusion to run on the host — the chip's SFLP block ships a game-rotation
-//! quaternion and estimates its own gyro bias.
+//! and no fusion to run on the host. The module supplies packed quaternion XYZ; the
+//! host reconstructs W and applies the fixed sensor-to-trunk mounting rotation.
+//! This does not identify whether a supplier obtains XYZ from SFLP, an MCU filter or
+//! another fusion implementation. The deployed supplier firmware is not available.
 //!
 //! Block layout at address 124:
 //!
 //! | bytes | contents |
 //! |---|---|
 //! | 0..6  | gyro x/y/z, `i16` LE counts, candidate encoding 16.4 counts/dps |
-//! | 6..12 | SFLP quaternion x/y/z as IEEE half-precision; `w = √(1 − x² − y² − z²)` |
+//! | 6..12 | quaternion x/y/z as IEEE half-precision; `w = √(1 − x² − y² − z²)` |
 //!
-//! The board's full diagnostic block is 20 bytes (it also carries raw accelerometer, a
-//! sample counter and status flags). The control loop consumes only the first 12 so the
-//! read fits alongside the servos in one transaction.
+//! Upstream's v2 board describes a 20-byte diagnostic extension. Do not assume a
+//! supplier module implements that extension; this path reads only the known 12 bytes.
 
-use crate::imu_quality::{Config, Mode, Monitor, Report, Status};
+use crate::imu_quality::{Config, MAX_SAMPLE_GAP_NS, Mode, Monitor, Report, Status};
 use crate::model::NUM_JOINTS;
 
 /// Bytes of the v2 board's block consumed per tick.
@@ -67,14 +68,25 @@ pub struct SflpDecoder {
     gyro_history: [[f64; 3]; 2],
     gravity_history: [[f64; 3]; 2],
     monitor: Monitor,
+    last_read_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct DecodedSample {
     pub quality_mode: Mode,
+    /// Exact int16 and binary16 words from the validated ID200 payload, before maths.
+    pub gyro_counts: [i16; 3],
+    pub quaternion_half_words: [u16; 3],
+    /// Sensor-frame quaternion, including the host-reconstructed W, before mounting.
+    pub sensor_quat: Option<[f64; 4]>,
+    pub mount_quat: [f64; 4],
     pub gyro_unfiltered: [f64; 3],
     pub measured_quat: Option<[f64; 4]>,
     pub selected_quat: [f64; 4],
+    /// False means selected_quat is retained history, not a usable current estimate.
+    /// Shadow mode reports availability only, not independent attitude validation.
+    pub selected_valid: bool,
+    pub control_ready: bool,
     pub gravity_filtered: [f64; 3],
     pub quality: Report,
 }
@@ -108,6 +120,7 @@ impl SflpDecoder {
             gyro_history: [[0.0; 3]; 2],
             gravity_history: [[0.0, 0.0, -1.0]; 2],
             monitor: Monitor::new(Config::default()),
+            last_read_at: None,
         }
     }
 
@@ -136,6 +149,7 @@ impl SflpDecoder {
     /// A deliberate torque-off ends a failed episode. A good packet alone must not restart it.
     pub fn rearm_after_relax(&mut self) {
         self.monitor.reset();
+        self.last_read_at = None;
         self.quat_samples = 0;
         self.gyro_history = [[0.0; 3]; 2];
         self.gravity_history = [[0.0, 0.0, -1.0]; 2];
@@ -150,11 +164,8 @@ impl SflpDecoder {
         raw: &[u8; IMU_BLOCK_LEN],
         now_ns: u64,
     ) -> (ImuData, DecodedSample) {
-        let gyro_sensor = [
-            i16::from_le_bytes([raw[0], raw[1]]) as f64 * GYRO_RAD_PER_LSB,
-            i16::from_le_bytes([raw[2], raw[3]]) as f64 * GYRO_RAD_PER_LSB,
-            i16::from_le_bytes([raw[4], raw[5]]) as f64 * GYRO_RAD_PER_LSB,
-        ];
+        let gyro_counts = std::array::from_fn(|i| i16::from_le_bytes([raw[2 * i], raw[2 * i + 1]]));
+        let gyro_sensor = gyro_counts.map(|value| f64::from(value) * GYRO_RAD_PER_LSB);
         let gyro = rotate(self.mount, gyro_sensor);
 
         // All-zero quaternion bytes mean SFLP has not written its table yet — the board
@@ -165,6 +176,7 @@ impl SflpDecoder {
             u16::from_le_bytes([raw[10], raw[11]]),
         ];
         let mut measured = None;
+        let mut sensor_quat = None;
         if packed != [0, 0, 0] {
             let (x, y, z) = (half(packed[0]), half(packed[1]), half(packed[2]));
             let norm_sq = x * x + y * y + z * z;
@@ -172,6 +184,7 @@ impl SflpDecoder {
             // half-precision rounding at full scale.
             if x.is_finite() && y.is_finite() && z.is_finite() && norm_sq <= 1.02 {
                 let w = (1.0 - norm_sq).max(0.0).sqrt();
+                sensor_quat = Some([w, x, y, z]);
                 let mount_inv = [
                     self.mount[0],
                     -self.mount[1],
@@ -186,6 +199,21 @@ impl SflpDecoder {
             }
         }
 
+        // Startup preflight and model loading are not a continuous sensor interval.
+        // Before readiness (and only before an actual fault), restart warm-up instead
+        // of permanently latching on that deliberate pause. Never predict across it.
+        if self.monitor.config.mode == Mode::Predict
+            && self.quat_samples < 25
+            && !self.monitor.faulted()
+            && self.last_read_at.is_some_and(|at| {
+                now_ns
+                    .checked_sub(at)
+                    .is_some_and(|elapsed| elapsed > MAX_SAMPLE_GAP_NS)
+            })
+        {
+            self.rearm_after_relax();
+        }
+        self.last_read_at = Some(now_ns);
         let (predicted, quality) = self.monitor.observe(now_ns, measured, gyro);
         let selected = if self.monitor.config.mode == Mode::Predict {
             predicted
@@ -222,9 +250,15 @@ impl SflpDecoder {
             out,
             DecodedSample {
                 quality_mode: self.monitor.config.mode,
+                gyro_counts,
+                quaternion_half_words: packed,
+                sensor_quat,
+                mount_quat: self.mount,
                 gyro_unfiltered: gyro,
                 measured_quat: measured,
                 selected_quat: self.last_quat,
+                selected_valid: selected.is_some(),
+                control_ready: self.ready(),
                 gravity_filtered: out.gravity,
                 quality,
             },

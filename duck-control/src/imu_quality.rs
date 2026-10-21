@@ -6,6 +6,9 @@
 
 use crate::imu::{mul, normalise, rotate_inverse};
 
+/// Continuous gyro is required even when an opt-in bridge budget is longer.
+pub const MAX_SAMPLE_GAP_NS: u64 = 40_000_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
@@ -18,6 +21,7 @@ pub enum Mode {
 pub enum Status {
     Bootstrap,
     Good,
+    HeadingAligned,
     Predicted,
     Unknown,
 }
@@ -115,7 +119,7 @@ impl Monitor {
         report.since_good_ms = age as f64 / 1e6;
         // The read clock is not a chip clock. A missing interval cannot be filled with
         // whichever rate happened to arrive next, even if the endpoint looks plausible.
-        let Some(elapsed) = elapsed.filter(|ns| *ns <= self.config.max_predict_ns) else {
+        let Some(elapsed) = elapsed.filter(|ns| *ns <= MAX_SAMPLE_GAP_NS) else {
             self.faulted = true;
             report.reason = "time_gap";
             if self.config.mode == Mode::Shadow {
@@ -133,6 +137,11 @@ impl Monitor {
         if let Some(q) = measured {
             report.gravity_residual_deg = Some(vector_angle(gravity(predicted), gravity(q)));
             report.rotation_residual_deg = Some(rotation_angle(predicted, q));
+        }
+        // The budget limits predicted outputs, not an independently consistent
+        // returning measurement. A return at 40.088 ms must not fault solely due to
+        // scheduling jitter. Gaps and an already-latched fault were rejected above.
+        if let Some(q) = measured {
             if report
                 .gravity_residual_deg
                 .unwrap()
@@ -144,6 +153,26 @@ impl Monitor {
                 report.status = Status::Good;
                 report.reason = "consistent";
                 return (Some(q), report);
+            }
+            // A game-rotation sensor can change its world yaw reference without a
+            // corresponding body rotation. Yaw is unobservable from gravity, and the
+            // walking policy does not consume absolute yaw. Preserve the measured tilt
+            // while carrying heading from continuous gyro; never accept a tilt failure
+            // through this path. Keep the raw quaternion/residuals in the trace.
+            if report.gravity_residual_deg.unwrap() <= report.threshold_deg {
+                let delta = mul(predicted, [q[0], -q[1], -q[2], -q[3]]);
+                let twist_norm = delta[0].hypot(delta[3]);
+                if twist_norm > 1e-9 {
+                    let yaw = [delta[0] / twist_norm, 0.0, 0.0, delta[3] / twist_norm];
+                    let aligned = mul(yaw, q);
+                    if rotation_angle(predicted, aligned) <= report.threshold_deg {
+                        self.previous = Some((aligned, gyro, now));
+                        self.good_at = now;
+                        report.status = Status::HeadingAligned;
+                        report.reason = "heading_reference_disagreement";
+                        return (Some(aligned), report);
+                    }
+                }
             }
         }
         if age <= self.config.max_predict_ns {
@@ -321,5 +350,76 @@ mod tests {
             m.observe(20_000_001, None, [0.0; 3]).1.status,
             Status::Unknown
         );
+    }
+
+    #[test]
+    fn heading_disagreement_preserves_measured_tilt_and_continuous_heading() {
+        let mut m = guard();
+        m.observe(1, Some(pitch(0.3)), [0.0; 3]);
+        let yaw = [0.85_f64.cos(), 0.0, 0.0, 0.85_f64.sin()];
+        let measured = mul(yaw, pitch(0.31));
+        let (selected, report) = m.observe(20_000_001, Some(measured), [0.0; 3]);
+        let selected = selected.unwrap();
+        assert_eq!(report.status, Status::HeadingAligned);
+        assert!(report.rotation_residual_deg.unwrap() > 90.0);
+        assert!(vector_angle(gravity(selected), gravity(measured)) < 1e-5);
+        assert!(rotation_angle(selected, pitch(0.31)) < 1e-5);
+    }
+
+    #[test]
+    fn a_tilt_failure_cannot_be_disguised_as_a_heading_change() {
+        let mut m = guard();
+        m.observe(1, Some(pitch(0.3)), [0.0; 3]);
+        let measured = mul([0.85_f64.cos(), 0.0, 0.0, 0.85_f64.sin()], pitch(1.0));
+        let (_, report) = m.observe(20_000_001, Some(measured), [0.0; 3]);
+        assert_eq!(report.status, Status::Predicted);
+        assert!(report.gravity_residual_deg.unwrap() > 35.0);
+    }
+
+    #[test]
+    fn longer_bridge_budget_does_not_authorise_a_missing_gyro_interval() {
+        let mut m = Monitor::new(Config {
+            mode: Mode::Predict,
+            max_predict_ns: 1_000_000_000,
+            ..Config::default()
+        });
+        m.observe(1, Some(UPRIGHT), [0.0; 3]);
+        let (q, report) = m.observe(80_000_001, Some(UPRIGHT), [0.0; 3]);
+        assert_eq!(q, None);
+        assert_eq!(report.reason, "time_gap");
+        assert!(m.faulted());
+    }
+
+    #[test]
+    fn extended_bridge_still_expires_and_requires_explicit_rearm() {
+        let mut m = Monitor::new(Config {
+            mode: Mode::Predict,
+            max_predict_ns: 1_000_000_000,
+            ..Config::default()
+        });
+        m.observe(1, Some(UPRIGHT), [0.0; 3]);
+        for i in 1..=50 {
+            assert_eq!(
+                m.observe(1 + i * 20_000_000, Some(pitch(0.6)), [0.0; 3])
+                    .1
+                    .status,
+                Status::Predicted
+            );
+        }
+        let report = m.observe(1_020_000_001, Some(pitch(0.6)), [0.0; 3]).1;
+        assert_eq!(report.reason, "prediction_expired");
+        assert!(m.faulted());
+        assert_eq!(m.observe(1_040_000_001, Some(UPRIGHT), [0.0; 3]).0, None);
+    }
+
+    #[test]
+    fn consistent_recovery_at_the_budget_boundary_is_not_false_expiry() {
+        let mut m = guard();
+        m.observe(1, Some(UPRIGHT), [0.0; 3]);
+        m.observe(20_000_001, Some(pitch(0.6)), [0.0; 3]);
+        let (selected, report) = m.observe(40_088_001, Some(UPRIGHT), [0.0; 3]);
+        assert_eq!(selected, Some(UPRIGHT));
+        assert_eq!(report.status, Status::Good);
+        assert!(!m.faulted());
     }
 }
